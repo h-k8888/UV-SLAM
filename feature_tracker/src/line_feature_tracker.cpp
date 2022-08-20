@@ -34,7 +34,7 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
 
     /// raw image undistortion
     Mat undistort_img, undistort_img1;
-    imageUndistortion(img, undistort_img);
+    imageUndistortion(img, undistort_img); //undistort_img 垂直合并原图像和畸变纠正后的图像
     if (forw_img.empty())
         prev_img = curr_img = forw_img = undistort_img.clone();
     else
@@ -411,7 +411,7 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
             {
 //                tmp_vp_ids.at(good_match_vector.at(i).trainIdx)=vp_ids.at(good_match_vector.at(i).queryIdx);
                 tmp_ids.at(good_match_vector.at(i).trainIdx)=ids.at(good_match_vector.at(i).queryIdx);
-                tmp_track_cnt.at(good_match_vector.at(i).trainIdx)=track_cnt.at(good_match_vector.at(i).queryIdx)+1;
+                tmp_track_cnt.at(good_match_vector.at(i).trainIdx)=track_cnt.at(good_match_vector.at(i).queryIdx)+1; //追踪次数+1
             }
         }
 //        cout << "----" << endl;
@@ -500,7 +500,7 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
     prev_start_un_pts = curr_start_un_pts;
     prev_end_un_pts = curr_end_un_pts;
 
-    normalizePoints();
+    normalizePoints(); //转换到相机归一化坐标系
     int frame_index = 0;
 //    cout << t_r.toc() << endl;
 }
@@ -1184,7 +1184,7 @@ void LineFeatureTracker::imageUndistortion(Mat &_img, Mat &_out_undistort_img)
     undistort(original_image, undistorted_image, Camera_Matrix, Discotrion_Coefficients);
 
     Mat merge_img;
-    vconcat(original_image, undistorted_image, merge_img);
+    vconcat(original_image, undistorted_image, merge_img); //垂直合并
     cv_bridge::CvImage out_img_msg;
     out_img_msg.encoding = sensor_msgs::image_encodings::TYPE_8UC1;
     out_img_msg.image = merge_img;

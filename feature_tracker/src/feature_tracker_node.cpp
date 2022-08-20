@@ -255,7 +255,7 @@ void img_callback(const sensor_msgs::ImageConstPtr &img_msg)
                     start_y_of_line.values.push_back(start_un_pts[j].y);
                     end_x_of_line.values.push_back(end_un_pts[j].x);
                     end_y_of_line.values.push_back(end_un_pts[j].y);
-                    id_of_line.values.push_back(p_id);
+                    id_of_line.values.push_back(p_id); //
                     start_u_of_line.values.push_back(start_pts[j].x);
                     start_v_of_line.values.push_back(start_pts[j].y);
                     end_u_of_line.values.push_back(end_pts[j].x);

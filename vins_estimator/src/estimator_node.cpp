@@ -454,7 +454,7 @@ void process()
 
             // lines
             map<int, vector<Eigen::Matrix<double, 15, 1>>> image_line;  //14 not sure
-            for (unsigned int i = 0; i < img_msg->channels[5].values.size(); i++)
+            for (unsigned int i = 0; i < img_msg->channels[5].values.size(); i++) //line id
             {
                 int line_id = img_msg->channels[5].values[i] + 0.5;;
                 double start_x = img_msg->channels[6].values[i];

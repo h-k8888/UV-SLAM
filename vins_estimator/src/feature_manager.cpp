@@ -522,19 +522,19 @@ void FeatureManager::triangulateLine(Vector3d Ps[], Matrix3d Rs_estimate[], Vect
         if(it_per_id.orthonormal_vec[3] != 0 || it_per_id.line_feature_per_frame.size() < 2)
             continue;
 
-        int imu_i = it_per_id.start_frame;
-        int imu_j = it_per_id.start_frame + it_per_id.used_num - 1;
+        int imu_i = it_per_id.start_frame; // 看到线特征的第一帧
+        int imu_j = it_per_id.start_frame + it_per_id.used_num - 1; //看到线特征的最后一帧
 
         Matrix3d R_left = Rs[imu_i] * ric[0];
         Quaterniond q_left(R_left);
-        Vector3d t_left = Rs[imu_i] * tic[0] + Ps[imu_i] ;
+        Vector3d t_left = Rs[imu_i] * tic[0] + Ps[imu_i] ; //第i帧相机位姿
 
         Matrix3d R_right = Rs[imu_j] * ric[0];
         Quaterniond q_right(R_right);
-        Vector3d t_right = Rs[imu_j] * tic[0] + Ps[imu_j] ;
+        Vector3d t_right = Rs[imu_j] * tic[0] + Ps[imu_j] ;//第j帧相机位姿
 
-        Quaterniond relative_q = q_left.inverse() * q_right;
-        Vector3d relative_t = q_left.inverse().toRotationMatrix() * (t_right - t_left);
+        Quaterniond relative_q = q_left.inverse() * q_right; // i <-- j
+        Vector3d relative_t = q_left.inverse().toRotationMatrix() * (t_right - t_left); //i帧下j相机坐标， i <-- j
 
         Vector3d left_sp = it_per_id.line_feature_per_frame[0].start_point;
         Vector3d left_ep = it_per_id.line_feature_per_frame[0].end_point;
@@ -542,7 +542,7 @@ void FeatureManager::triangulateLine(Vector3d Ps[], Matrix3d Rs_estimate[], Vect
         Vector3d right_sp = it_per_id.line_feature_per_frame[it_per_id.used_num - 1].start_point;
         Vector3d right_ep = it_per_id.line_feature_per_frame[it_per_id.used_num - 1].end_point;
 
-        Vector3d right_sp_l = relative_q * right_sp;
+        Vector3d right_sp_l = relative_q * right_sp; // i <-- j
         Vector3d right_ep_l = relative_q * right_ep;
 
         Vector3d t_cj_ci = q_right.inverse().toRotationMatrix() * (t_left - t_right);
@@ -568,12 +568,13 @@ void FeatureManager::triangulateLine(Vector3d Ps[], Matrix3d Rs_estimate[], Vect
         T_wl.block<3,3>(0,3) = Utility::skewSymmetric(t_left) * R_left;
         T_wl.block<3,3>(3,3) = R_left;
 
-        line_w = T_wl * line_l;
+        line_w = T_wl * line_l; //w系下 l 普吕克坐标
 
         Vector3d n_w, d_w;
         n_w = line_w.block<3,1>(0,0);
         d_w = line_w.block<3,1>(3,0);
 
+        // [n, d, (n X d) / (|| n X d ||)
         Rotation_psi.block<3,1>(0,0) = n_w/(n_w.norm());
         Rotation_psi.block<3,1>(0,1) = d_w/(d_w.norm());
         Rotation_psi.block<3,1>(0,2) = n_w.cross(d_w)/(n_w.cross(d_w).norm());
@@ -581,7 +582,7 @@ void FeatureManager::triangulateLine(Vector3d Ps[], Matrix3d Rs_estimate[], Vect
 //        if(n_w.norm()/d_w.norm() < 1.0)
 //            continue;
 
-        it_per_id.orthonormal_vec.head(3) = Rotation_psi.eulerAngles(0,1,2);
+        it_per_id.orthonormal_vec.head(3) = Rotation_psi.eulerAngles(0,1,2);//todo 210?
         it_per_id.orthonormal_vec(3) = atan2(n_w.norm(), d_w.norm());
 
         index++;

@@ -873,7 +873,7 @@ void Estimator::optimization()
     for(auto &it_per_id : f_manager.line_feature)
     {
         it_per_id.used_num = it_per_id.line_feature_per_frame.size();
-        if(it_per_id.used_num < LINE_WINDOW)
+        if(it_per_id.used_num < LINE_WINDOW) //5
             continue;
 //        if(it_per_id.solve_flag == 0)
 //            continue;

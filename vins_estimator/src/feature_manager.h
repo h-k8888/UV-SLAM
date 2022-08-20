@@ -89,7 +89,7 @@ class LineFeaturePerId
 
     Vector3d direction_vec;
     Vector3d normal_vec;
-    Vector4d orthonormal_vec;
+    Vector4d orthonormal_vec; // roll pitch yaw theta
     //Vector3d gt_p;
 
     vector<Vector3d> buf_p_ls;
