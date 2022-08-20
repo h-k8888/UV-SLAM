@@ -1,3 +1,4 @@
+
 cmake_minimum_required(VERSION 2.8.3)
 project(uv_feature_tracker)
 
@@ -29,6 +30,7 @@ include_directories(
 )
 
 set(ELSED_PATH ${PROJECT_SOURCE_DIR}/../ELSED)
+find_library(ELSED_LIB elsed ${ELSED_PATH}/build)
 include_directories(${ELSED_PATH}/src)
 link_directories(${ELSED_PATH}/build)
 add_library(ELSED_LIB
@@ -36,8 +38,9 @@ add_library(ELSED_LIB
   ${ELSED_PATH}/src/ELSED.cpp
   ${ELSED_PATH}/src/FullSegmentInfo.cpp
 )
-message("**************************")
-message(${ELSED_PATH})
+#message("**************************")
+#message(${ELSED_PATH})
+
 
 add_executable(feature_tracker
     src/feature_tracker_node.cpp
