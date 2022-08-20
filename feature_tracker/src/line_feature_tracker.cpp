@@ -65,6 +65,7 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
     vector<int> local_vp_ids;
     double thAngle = 1.0 / 180.0 * CV_PI;
 
+    //上一帧已探测到直线
     if(curr_keyLine.size()>0)
     {
         vector<uchar> status;
@@ -73,8 +74,10 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
         Mat forw_descriptor;
 
         TicToc t_r;
+        //线特征提取，计算LBD描述子
         lineExtraction(forw_img, forw_keyLine, forw_descriptor);
         double t_extraction = t_r.toc();
+        //LBD描述子匹配线特征
         lineMatching(curr_keyLine, forw_keyLine, curr_descriptor, forw_descriptor, good_match_vector);
         double t_matching = t_r.toc() - t_extraction;
 //        cout << t_extraction << ", " << t_matching << endl;
@@ -82,9 +85,10 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
 //        lineMergingTwoPhase( curr_img, forw_img, curr_keyLine, forw_keyLine, curr_descriptor, forw_descriptor, good_match_vector );
 //        double t_linemerging = t_r.toc() - t_linematching;
 
-
+        //如果新一帧有线特征
         if(forw_keyLine.size() > 1)
         {
+            //计算曼哈顿世界的3个消失点
             getVPHypVia2Lines(forw_keyLine, para_vector, length_vector, orientation_vector, vpHypo);
             getSphereGrids(forw_keyLine, para_vector, length_vector, orientation_vector, sphereGrid );
             getBestVpsHyp(sphereGrid, vpHypo, tmp_vps);
@@ -976,6 +980,7 @@ void LineFeatureTracker::lineExtraction( Mat &cur_img, vector<LineKL> &keyLine, 
     int line_id = 0;
     for(unsigned int i = 0; i < segs.size(); i++)
     {
+        //用opencv的keyline记录每根线的信息
         LineKL kl = MakeKeyLine(cv::Point2f(segs[i][0], segs[i][1]), cv::Point2f(segs[i][2], segs[i][3]), cur_img.cols);
 //        if(kl.lineLength < 40)
 //            continue;

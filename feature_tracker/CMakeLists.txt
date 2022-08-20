@@ -30,11 +30,14 @@ include_directories(
 
 set(ELSED_PATH ${PROJECT_SOURCE_DIR}/../ELSED)
 include_directories(${ELSED_PATH}/src)
+link_directories(${ELSED_PATH}/build)
 add_library(ELSED_LIB
   ${ELSED_PATH}/src/EdgeDrawer.cpp
   ${ELSED_PATH}/src/ELSED.cpp
   ${ELSED_PATH}/src/FullSegmentInfo.cpp
 )
+message("**************************")
+message(${ELSED_PATH})
 
 add_executable(feature_tracker
     src/feature_tracker_node.cpp
@@ -44,5 +47,5 @@ add_executable(feature_tracker
     src/utility.cpp
     )
 
-target_link_libraries(feature_tracker ${catkin_LIBRARIES} ${OpenCV_LIBS} ${ELSED_LIB})
+target_link_libraries(feature_tracker ${catkin_LIBRARIES} ${OpenCV_LIBS} libelsed.a ${ELSED_LIB})
 
