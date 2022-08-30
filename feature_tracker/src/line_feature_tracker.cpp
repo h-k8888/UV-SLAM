@@ -359,8 +359,9 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
         end_pts_velocity.clear();
         vps.clear();
 
-        if(forw_keyLine.size() > 0)
+        if(forw_keyLine.size() > 0)        //如果新一帧有线特征
         {
+            //遍历所有线特征，记录起点、终点、速度等信息
             for(int i=0; i<forw_keyLine.size(); i++)
             {
                 cv::Point2f start_pts = forw_keyLine[i].getStartPoint();
@@ -385,7 +386,7 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
                     if(local_vp_ids[i] == 3)
                         vps.push_back(Vector3d(0.0,0.0,0.0));
                     else
-                        vps.push_back(tmp_vps[local_vp_ids[i]]/tmp_vps[local_vp_ids[i]](2));
+                        vps.push_back(tmp_vps[local_vp_ids[i]]/tmp_vps[local_vp_ids[i]](2)); //坐标归一化
                 }
 
 //                Vector3d a = tmp_vps[local_vp_ids[i]]/tmp_vps[local_vp_ids[i]](2);
@@ -410,7 +411,7 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
             for(int i=0; i< good_match_vector.size(); i++)
             {
 //                tmp_vp_ids.at(good_match_vector.at(i).trainIdx)=vp_ids.at(good_match_vector.at(i).queryIdx);
-                tmp_ids.at(good_match_vector.at(i).trainIdx)=ids.at(good_match_vector.at(i).queryIdx);
+                tmp_ids.at(good_match_vector.at(i).trainIdx)=ids.at(good_match_vector.at(i).queryIdx); //记录线 id
                 tmp_track_cnt.at(good_match_vector.at(i).trainIdx)=track_cnt.at(good_match_vector.at(i).queryIdx)+1; //追踪次数+1
             }
         }

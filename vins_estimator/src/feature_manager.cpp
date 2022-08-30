@@ -104,10 +104,10 @@ bool FeatureManager::addFeatureCheckParallax(int frame_count, const map<int, vec
         }
     }
 
-    unsigned int num_tracked_line = 0;
+    unsigned int num_tracked_line = 0; //已有线特征，在当前帧在此跟踪到的数量
     for (auto &id_lines : image_line)
     {
-        LineFeaturePerFrame l_per_fra(id_lines.second[0], td);
+        LineFeaturePerFrame l_per_fra(id_lines.second[0], td); //建立线特征
 
         int line_id = id_lines.first;
 
