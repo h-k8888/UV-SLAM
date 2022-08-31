@@ -354,7 +354,7 @@ void pubLineCloud(const Estimator &estimator, std_msgs::Header &header)
 
     for(auto &it_per_id : estimator.f_manager.line_feature)
     {
-        if(it_per_id.solve_flag == 1)
+        if(it_per_id.solve_flag == 1) //for all solve succ lines
         {
             int imu_i = it_per_id.start_frame;
             Matrix3d R_wc = estimator.Rs[imu_i] * estimator.ric[0];
@@ -362,10 +362,11 @@ void pubLineCloud(const Estimator &estimator, std_msgs::Header &header)
 
             Vector3d sp_2d_c = it_per_id.line_feature_per_frame[0].start_point;
             Vector3d ep_2d_c = it_per_id.line_feature_per_frame[0].end_point;
+            //端点像素平移
             Vector3d sp_2d_p_c = Vector3d(sp_2d_c(0) + scale, -scale*(ep_2d_c(0) - sp_2d_c(0))/(ep_2d_c(1) - sp_2d_c(1)) + sp_2d_c(1), 1);
             Vector3d ep_2d_p_c = Vector3d(ep_2d_c(0) + scale, -scale*(ep_2d_c(0) - sp_2d_c(0))/(ep_2d_c(1) - sp_2d_c(1)) + ep_2d_c(1), 1);
 
-            Vector3d pi_s = sp_2d_c.cross(sp_2d_p_c);
+            Vector3d pi_s = sp_2d_c.cross(sp_2d_p_c);//start point plane normal
             Vector3d pi_e = ep_2d_c.cross(ep_2d_p_c);
 
             Vector4d pi_s_4d, pi_e_4d;
@@ -378,10 +379,10 @@ void pubLineCloud(const Estimator &estimator, std_msgs::Header &header)
             AngleAxisd pitch(it_per_id.orthonormal_vec(1), Vector3d::UnitY());
             AngleAxisd yaw(it_per_id.orthonormal_vec(2), Vector3d::UnitZ());
             Eigen::Matrix<double, 3, 3, Eigen::RowMajor> Rotation_psi;
-            Rotation_psi = roll * pitch * yaw;
-            double pi = it_per_id.orthonormal_vec(3);
+            Rotation_psi = roll * pitch * yaw; // [n, d, (n X d) / (|| n X d ||)
+            double pi = it_per_id.orthonormal_vec(3);//atan2(n_w.norm(), d_w.norm());
 
-            Vector3d n_w = cos(pi) * Rotation_psi.block<3,1>(0,0);
+            Vector3d n_w = cos(pi) * Rotation_psi.block<3,1>(0,0);//???
             Vector3d d_w = sin(pi) * Rotation_psi.block<3,1>(0,1);
 
             Matrix<double, 6, 1> line_w;
@@ -410,10 +411,10 @@ void pubLineCloud(const Estimator &estimator, std_msgs::Header &header)
 
             Vector4d D_s = L_c * pi_s_4d;
             Vector4d D_e = L_c * pi_e_4d;
-            Vector3d D_s_3d(D_s(0)/D_s(3), D_s(1)/D_s(3), D_s(2)/D_s(3));
+            Vector3d D_s_3d(D_s(0)/D_s(3), D_s(1)/D_s(3), D_s(2)/D_s(3));//3d endpoints in camera frame
             Vector3d D_e_3d(D_e(0)/D_e(3), D_e(1)/D_e(3), D_e(2)/D_e(3));
 
-            Vector3d D_s_w = R_wc * D_s_3d + t_wc;
+            Vector3d D_s_w = R_wc * D_s_3d + t_wc;//3d endpoints in world frame
             Vector3d D_e_w = R_wc * D_e_3d + t_wc;
 
             if(
@@ -426,7 +427,7 @@ void pubLineCloud(const Estimator &estimator, std_msgs::Header &header)
                 continue;
             }
 
-            sp.x = D_s_w(0);
+            sp.x = D_s_w(0);//3d endpoints in world frame
             sp.y = D_s_w(1);
             sp.z = D_s_w(2);
 
@@ -444,7 +445,7 @@ void pubLineCloud(const Estimator &estimator, std_msgs::Header &header)
             key_lines.points.push_back(ep);
         }
     }
-    pub_line_cloud.publish(key_lines);
+    pub_line_cloud.publish(key_lines); //"line_cloud", publish  all solve succ lines
 //    cout << max_dist << endl;
 
     vector<geometry_msgs::Point> points;
@@ -464,11 +465,12 @@ void pubLineCloud(const Estimator &estimator, std_msgs::Header &header)
     margin_lines.color.g = 0.0;
     margin_lines.color.b = 0.0;
     margin_lines.color.a = 1.0;
+//    ROS_INFO("margin_lines.point: %d", margin_lines.points.size());
 
     for(auto &it_per_id : estimator.f_manager.line_feature)
     {
         int used_num = it_per_id.line_feature_per_frame.size();
-        if(it_per_id.solve_flag == 1 && used_num == 1 && it_per_id.start_frame == 0)
+        if(it_per_id.solve_flag == 1 && used_num == 1 && it_per_id.start_frame == 0) //成功优化、仅滑窗第一帧看到，即将消失。
         {
 //            if(it_per_id.line_feature_per_frame[0].vp(2) == 0)
 //                continue;
@@ -596,7 +598,7 @@ void pubLineCloud(const Estimator &estimator, std_msgs::Header &header)
                           sqrt(pow(points.at(i*2 + 1).x, 2) +
                                pow(points.at(i*2 + 1).y, 2));
         float ratio = mid_dist/max_dist;
-        int index = static_cast<int>(ratio * num);
+        int index = static_cast<int>(ratio * num); //按照线特征距离世界坐标系原点距离分配发布器索引
         if(index < num){
             margin_line_list.at(index).points.push_back(points.at(i * 2));
             margin_line_list.at(index).points.push_back(points.at(i * 2 + 1));

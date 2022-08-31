@@ -31,7 +31,7 @@ Panels:
     Experimental: false
     Name: Time
     SyncMode: 0
-    SyncSource: tracked image
+    SyncSource: ""
   - Class: rviz/Displays
     Help Height: 78
     Name: Displays
@@ -146,7 +146,7 @@ Visualization Manager:
           Marker Topic: /vins_estimator/camera_pose_visual
           Name: camera_visual
           Namespaces:
-            CameraPoseVisualization: true
+            {}
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -214,22 +214,13 @@ Visualization Manager:
           Frame Timeout: 15
           Frames:
             All Enabled: true
-            body:
-              Value: true
-            camera:
-              Value: true
-            world:
-              Value: true
           Marker Scale: 1
           Name: TF
           Show Arrows: true
           Show Axes: true
           Show Names: true
           Tree:
-            world:
-              body:
-                camera:
-                  {}
+            {}
           Update Interval: 0
           Value: true
         - Class: rviz/Marker
@@ -237,12 +228,12 @@ Visualization Manager:
           Marker Topic: /vins_estimator/line_cloud
           Name: current_line
           Namespaces:
-            key_lines: true
+            {}
           Queue Size: 100
           Value: true
         - Class: rviz/Marker
           Enabled: true
-          Marker Topic: /vins_estimator/line_history_cloud_vr
+          Marker Topic: /vins_estimator/line_history_cloud
           Name: history_line
           Namespaces:
             {}
@@ -582,7 +573,7 @@ Window Geometry:
     collapsed: true
   Width: 1855
   X: 65
-  Y: 924
+  Y: 24
   loop_match_image:
     collapsed: false
   raw_image:
