@@ -92,6 +92,12 @@ class LineFeaturePerId
     Vector4d orthonormal_vec; // roll pitch yaw theta
     //Vector3d gt_p;
 
+//    vector<Matrix<double, 6, 1>> pi_se_6d;
+//    vector<Vector4d> n_d_w; // plane parameter abcd ,[n, d] in world frame
+    vector<Matrix3d> Rs; // rotation in world frame
+    vector<Vector3d> Ps; // position in world frame
+    vector<Vector3d> pi_c; // plane normal in camera frame
+
     vector<Vector3d> buf_p_ls;
     vector<Vector3d> buf_p_le;
     vector<int> buf_p_ls_index;
@@ -232,6 +238,10 @@ class FeatureManager
     void setOrthoPlucker(const vector<Vector4d> &get_lineOrtho);
     void setLineOrtho(vector<Vector4d> &get_lineOrtho, Vector3d Ps[], Matrix3d Rs[],Vector3d tic, Matrix3d ric);
     void getHSVColor(float h, float& red, float & green, float & blue);
+
+    double reprojection_error( Vector4d obs, Matrix3d Rwc, Vector3d twc, Matrix<double, 6, 1> line_w );
+    void removeLineOutlier(Vector3d Ps[], Matrix3d Rs[], Vector3d tic[], Matrix3d ric[]);
+    void removeLineBack(Vector3d Ps[], Matrix3d Rs[],Vector3d tic[], Matrix3d ric[]);
 
 
     list<FeaturePerId> feature;

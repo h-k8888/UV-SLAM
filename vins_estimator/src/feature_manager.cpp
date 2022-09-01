@@ -519,7 +519,7 @@ void FeatureManager::triangulateLine(Vector3d Ps[], Matrix3d Rs_estimate[], Vect
     for(auto &it_per_id : line_feature)
     {
         it_per_id.used_num = it_per_id.line_feature_per_frame.size();
-        if(it_per_id.orthonormal_vec[3] != 0 || it_per_id.line_feature_per_frame.size() < 2)
+        if(it_per_id.orthonormal_vec[3] != 0 || it_per_id.line_feature_per_frame.size() < 2) //未恢复普吕克坐标或仅看到两帧
             continue;
 
         int imu_i = it_per_id.start_frame; // 看到线特征的第一帧
@@ -696,6 +696,62 @@ void FeatureManager::removeLineBack()
             it->start_frame--;
         else
         {
+            it->line_feature_per_frame.erase(it->line_feature_per_frame.begin());
+            if (it->line_feature_per_frame.size() == 0)
+                line_feature.erase(it);
+        }
+    }
+}
+
+void FeatureManager::removeLineBack(Vector3d Ps[], Matrix3d Rs[],Vector3d tic[], Matrix3d ric[])
+{
+    for (auto it = line_feature.begin(), it_next = line_feature.begin();
+         it != line_feature.end(); it = it_next)
+    {
+        it_next++;
+
+        if (it->start_frame != 0)
+            it->start_frame--;
+        else
+        {
+            //储存线特征观察值，用于可视化延伸端点
+            if(it->solve_flag == 1) //for all solve succ lines
+            {
+                double scale = 1.0;
+                int imu_i = it->start_frame;
+                Matrix3d R_wc = Rs[imu_i] * ric[0];
+                Vector3d t_wc = Rs[imu_i] * tic[0] + Ps[imu_i];
+                it->Rs.emplace_back(R_wc);
+                it->Ps.emplace_back(t_wc);
+
+                Vector3d sp_2d_c = it->line_feature_per_frame[0].start_point;
+                Vector3d ep_2d_c = it->line_feature_per_frame[0].end_point;
+                //端点像素平移
+                Vector3d sp_2d_p_c = Vector3d(sp_2d_c(0) + scale,
+                                              -scale * (ep_2d_c(0) - sp_2d_c(0)) / (ep_2d_c(1) - sp_2d_c(1)) +
+                                              sp_2d_c(1), 1);
+                Vector3d ep_2d_p_c = Vector3d(ep_2d_c(0) + scale,
+                                              -scale * (ep_2d_c(0) - sp_2d_c(0)) / (ep_2d_c(1) - sp_2d_c(1)) +
+                                              ep_2d_c(1), 1);
+
+                Vector3d pi_s = sp_2d_c.cross(sp_2d_p_c);//start point plane normal
+                Vector3d pi_e = ep_2d_c.cross(ep_2d_p_c);
+                it->pi_c.emplace_back(pi_s);
+                it->pi_c.emplace_back(pi_e);
+
+//                Vector4d n_d_w; // plane parameters in world frame
+//                Vector3d pi_s_w = R_wc * pi_s;
+//                n_d_w.head(3) = pi_s_w;
+//                n_d_w(3) = pi_s_w.dot(t_wc);
+//                it->n_d_w.emplace_back(n_d_w);
+//
+//                pi_s_w = R_wc * pi_e;
+//                n_d_w.head(3) = pi_s_w;
+//                n_d_w(3) = - pi_s_w.dot(t_wc);
+//                it->n_d_w.emplace_back(n_d_w);
+            }
+
+
             it->line_feature_per_frame.erase(it->line_feature_per_frame.begin());
             if (it->line_feature_per_frame.size() == 0)
                 line_feature.erase(it);
@@ -1042,4 +1098,152 @@ void FeatureManager::getHSVColor(float h, float& red, float & green, float & blu
     green = color_G;
     blue = color_B;
 
+}
+
+
+// 滑窗内body的pose，相机到IMU的外参
+void FeatureManager::removeLineOutlier(Vector3d Ps[],  Matrix3d Rs[], Vector3d tic[], Matrix3d ric[])
+{
+    double scale = 1.0;
+
+    for (auto it_per_id = line_feature.begin(), it_next = line_feature.begin();
+         it_per_id != line_feature.end(); it_per_id = it_next)
+    {
+        it_next++;
+        it_per_id->used_num = it_per_id->line_feature_per_frame.size();//观测到的次数
+        if(it_per_id->orthonormal_vec[3] == 0 || it_per_id->line_feature_per_frame.size() < 2) //未恢复普吕克坐标或仅看到两帧
+            continue;
+        if (!(it_per_id->used_num >= LINE_WINDOW))
+            continue;
+
+        int imu_i = it_per_id->start_frame, imu_j = imu_i -1;
+
+
+        Matrix3d R_wc = Rs[imu_i] * ric[0];
+        Vector3d t_wc = Rs[imu_i] * tic[0] + Ps[imu_i] ;
+
+        Vector3d sp_2d_c = it_per_id->line_feature_per_frame[0].start_point;
+        Vector3d ep_2d_c = it_per_id->line_feature_per_frame[0].end_point;
+        //端点像素平移
+        Vector3d sp_2d_p_c = Vector3d(sp_2d_c(0) + scale, -scale*(ep_2d_c(0) - sp_2d_c(0))/(ep_2d_c(1) - sp_2d_c(1)) + sp_2d_c(1), 1);
+        Vector3d ep_2d_p_c = Vector3d(ep_2d_c(0) + scale, -scale*(ep_2d_c(0) - sp_2d_c(0))/(ep_2d_c(1) - sp_2d_c(1)) + ep_2d_c(1), 1);
+
+        Vector3d pi_s = sp_2d_c.cross(sp_2d_p_c);//start point plane normal
+        Vector3d pi_e = ep_2d_c.cross(ep_2d_p_c);
+
+        Vector4d pi_s_4d, pi_e_4d;
+        pi_s_4d.head(3) = pi_s;
+        pi_s_4d(3) = 0;
+        pi_e_4d.head(3) = pi_e;
+        pi_e_4d(3) = 0;
+
+        AngleAxisd roll(it_per_id->orthonormal_vec(0), Vector3d::UnitX());
+        AngleAxisd pitch(it_per_id->orthonormal_vec(1), Vector3d::UnitY());
+        AngleAxisd yaw(it_per_id->orthonormal_vec(2), Vector3d::UnitZ());
+        Eigen::Matrix<double, 3, 3, Eigen::RowMajor> Rotation_psi;
+        Rotation_psi = roll * pitch * yaw; // [n, d, (n X d) / (|| n X d ||)
+        double pi = it_per_id->orthonormal_vec(3);//atan2(n_w.norm(), d_w.norm());
+
+        Vector3d n_w = cos(pi) * Rotation_psi.block<3,1>(0,0);//???
+        Vector3d d_w = sin(pi) * Rotation_psi.block<3,1>(0,1);
+
+        Matrix<double, 6, 1> line_w;
+        line_w.block<3,1>(0,0) = n_w;
+        line_w.block<3,1>(3,0) = d_w;
+
+//            cout << "---------------" << endl;
+//            cout << n_w(0) << ", " << n_w(1) << ", " << n_w(2) << endl;
+//            cout << d_w(0) << ", " << d_w(1) << ", " << d_w(2) << endl;
+
+        Matrix<double, 6, 6> T_cw;
+        T_cw.setZero();
+        T_cw.block<3,3>(0,0) = R_wc.transpose();
+        T_cw.block<3,3>(0,3) = Utility::skewSymmetric(-R_wc.transpose()*t_wc) * R_wc.transpose();
+        T_cw.block<3,3>(3,3) = R_wc.transpose();
+
+        Matrix<double, 6, 1> line_c = T_cw * line_w;
+        Vector3d n_c = line_c.block<3,1>(0,0);
+        Vector3d d_c = line_c.block<3,1>(3,0);
+
+        Matrix4d L_c;
+        L_c.setZero();
+        L_c.block<3,3>(0,0) = Utility::skewSymmetric(n_c);
+        L_c.block<3,1>(0,3) = d_c;
+        L_c.block<1,3>(3,0) = -d_c.transpose();
+
+        Vector4d D_s = L_c * pi_s_4d;
+        Vector4d D_e = L_c * pi_e_4d;
+        Vector3d D_s_3d(D_s(0)/D_s(3), D_s(1)/D_s(3), D_s(2)/D_s(3));//3d endpoints in camera frame
+        Vector3d D_e_3d(D_e(0)/D_e(3), D_e(1)/D_e(3), D_e(2)/D_e(3));
+
+        Vector3d D_s_w = R_wc * D_s_3d + t_wc;//3d endpoints in world frame
+        Vector3d D_e_w = R_wc * D_e_3d + t_wc;
+
+        if(
+                std::isnan(D_s_w(0)) || std::isnan(D_s_w(1)) || std::isnan(D_s_w(2)) ||
+                std::isnan(D_e_w(0)) || std::isnan(D_e_w(1)) || std::isnan(D_e_w(2))
+                || D_s_3d(2) < 0 || D_e_3d(2) < 0
+//                    || (D_s_w - D_e_w).norm() > 10
+                )
+        {
+            continue;
+        }
+
+        int i = 0;
+        double allerr = 0;
+        Eigen::Vector3d tij;
+        Eigen::Matrix3d Rij;
+        Eigen::Vector4d obs;
+
+        //std::cout<<"reprojection_error: \n";
+        for (auto &it_per_frame : it_per_id->line_feature_per_frame)   // 遍历所有的观测， 注意 start_frame 也会被遍历
+        {
+            imu_j++;
+
+            obs.head(2) = it_per_frame.start_point.head(2);
+            obs.tail(2) = it_per_frame.end_point.head(2);// 每一帧上的观测, 起点终点的相机坐标系 归一化坐标
+            Eigen::Vector3d t1 = Ps[imu_j] + Rs[imu_j] * tic[0]; // t_w_cj = Rwi * tic + twi
+            Eigen::Matrix3d R1 = Rs[imu_j] * ric[0];// R_w_cj
+
+            //投影到相机系下普吕克坐标法向量确定的平面，计算距离起点、终点平均距离
+            double err =  reprojection_error(obs, R1, t1, line_w);
+
+//            if(err > 0.0000001)
+//                i++;
+//            allerr += err;    // 计算平均投影误差
+
+            if(allerr < err)    // 记录最大投影误差，如果最大的投影误差比较大，那就说明有outlier
+                allerr = err;
+        }
+//        allerr = allerr / i;
+        if (allerr > 10.0 / 500.0)
+        {
+//            std::cout<<"remove a large error\n";
+            line_feature.erase(it_per_id);
+        }
+    }
+}
+
+double FeatureManager::reprojection_error( Vector4d obs, Matrix3d Rwc, Vector3d twc, Matrix<double, 6, 1> line_w )
+{
+
+    double error = 0;
+
+    Vector3d n_w, d_w;
+    n_w = line_w.head(3);
+    d_w = line_w.tail(3);
+
+    Vector3d p1, p2;
+    p1 << obs[0], obs[1], 1;//起点终点的相机坐标系 归一化坐标
+    p2 << obs[2], obs[3], 1;
+
+    Matrix<double, 6, 1> line_c = plk_from_pose(line_w,Rwc,twc);//将w系下的普吕克坐标转换到相机系下
+    Vector3d nc = line_c.head(3);
+    double sql = nc.head(2).norm();
+    nc /= sql;//相机系下，法向量归一化
+
+    error += fabs( nc.dot(p1) );//todo 投影到相机系下普吕克坐标法相量确定的平面计算距离？
+    error += fabs( nc.dot(p2) );
+
+    return error / 2.0;
 }

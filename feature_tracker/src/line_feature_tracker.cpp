@@ -69,6 +69,9 @@ LineFeatureTracker::LineFeatureTracker()
     allfeature_cnt = 0;
 }
 
+int num_frames = 0;
+double sum_line_time = 0;
+double mean_line_time = 0;
 void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
 {
     TicToc t_r;
@@ -226,20 +229,17 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
 ////        lineMergingTwoPhase( curr_img, forw_img, curr_keyLine, forw_keyLine, curr_descriptor, forw_descriptor, good_match_vector );
 ////        double t_linemerging = t_r.toc() - t_linematching;
 
+        TicToc t_vp;
         //如果新一帧有线特征
         if(forw_keyLine.size() > 1)
         {
             //计算曼哈顿世界的3个消失点
             getVPHypVia2Lines(forw_keyLine, para_vector, length_vector, orientation_vector, vpHypo);
-//            ROS_DEBUG("getVPHypVia2Lines");
             getSphereGrids(forw_keyLine, para_vector, length_vector, orientation_vector, sphereGrid );
-//            ROS_DEBUG("getSphereGrids");
             getBestVpsHyp(sphereGrid, vpHypo, tmp_vps);
-//            ROS_DEBUG("getBestVpsHyp");
             lines2Vps(forw_keyLine, thAngle, tmp_vps, clusters, local_vp_ids);
-//            ROS_DEBUG("lines2Vps");
-
         }
+        ROS_DEBUG("compute vanishing point cost: %f ms", t_vp.toc());
 
 //        tmp_track_cnt.clear();
 //        tmp_ids.clear();
@@ -335,17 +335,11 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
         if(curr_keyLine.size() > 1)
         {
             getVPHypVia2Lines(curr_keyLine, para_vector, length_vector, orientation_vector, vpHypo);
-//            ROS_DEBUG("getVPHypVia2Lines, done");
             getSphereGrids(curr_keyLine, para_vector, length_vector, orientation_vector, sphereGrid );
-//            ROS_DEBUG("getSphereGrids, done");
             getBestVpsHyp(sphereGrid, vpHypo, tmp_vps);
-//            ROS_DEBUG("getBestVpsHyp, done");
             lines2Vps(curr_keyLine, thAngle, tmp_vps, clusters, local_vp_ids);
-//            ROS_DEBUG("lines2Vps, done");
         }
 //        drawClusters(img2, curr_keyLine, clusters);
-        ROS_DEBUG("compute vanishing point, done.");
-
 
         curr_start_pts.clear();
         curr_end_pts.clear();
@@ -401,6 +395,11 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
     normalizePoints(); //转换到相机归一化坐标系
     int frame_index = 0;
 //    cout << t_r.toc() << endl;
+
+    sum_line_time += t_r.toc();
+    ++num_frames;
+    mean_line_time = sum_line_time / (1.0 * num_frames);
+    ROS_INFO("mean line feature tracker processing costs: %f", mean_line_time);
 }
 
 bool FindMatchedLine( LineKL query_line, LineKL train_line,
@@ -2316,12 +2315,12 @@ void LineFeatureTracker::initLinesPredict() {
 //
 //    ROS_ASSERT(lines_predict.size() == prev_lineID.size());
 
-    ROS_WARN("lines_predict");
-    for (int i = 0; i < lines_predict.size(); ++i)
-    {
-        const Line& l = lines_predict[i];
-        ROS_DEBUG("line local: %d , global: %d", i, prev_lineID[i]);
-    }
+//    ROS_WARN("lines_predict");
+//    for (int i = 0; i < lines_predict.size(); ++i)
+//    {
+//        const Line& l = lines_predict[i];
+//        ROS_DEBUG("line local: %d , global: %d", i, prev_lineID[i]);
+//    }
 }
 
 void LineFeatureTracker::rejectWithF(vector<uchar> &status) {
@@ -2598,7 +2597,7 @@ void LineFeatureTracker::checkAndUpdateEndpoints(vector<Line> &lines) {
 void LineFeatureTracker::reduceLine(vector<Line> &lines, vector<int> &IDs) {
     ROS_ASSERT(lines.size() == IDs.size());
     ROS_ASSERT(lines.size() == tmp_track_cnt.size());
-    ROS_WARN("reduceLine");
+//    ROS_WARN("reduceLine");
 
     int j = 0;
     for (int i = 0; i < int(lines.size()); i++)
@@ -2611,8 +2610,8 @@ void LineFeatureTracker::reduceLine(vector<Line> &lines, vector<int> &IDs) {
             forw_pts[2 * j + 1] = forw_pts[2 * i + 1];
             IDs[j++] = IDs[i];
         }
-        else
-            ROS_WARN("lose line local: %d, global: %d, valid type = %d", i, IDs[i], lines[i].is_valid);
+//        else
+//            ROS_WARN("lose line local: %d, global: %d, valid type = %d", i, IDs[i], lines[i].is_valid);
     }
 
     forw_pts.resize(2 * j);
@@ -2727,7 +2726,7 @@ void LineFeatureTracker::extractELSEDLine(const Mat &img, vector<Line> &lines, v
 
         int id_min = -1;
         float dist_min = 9999.999;
-        bool merge_line = false;//todo
+        bool merge_line = true;//todo
         vector<int> id_merge;
 //        ROS_DEBUG("lines_predict_extract[%d].size() = %lu", i, lines_predict_extract[i].size());
         ROS_ASSERT(lines_predict_extract.size() == lines_exist.size());

@@ -1001,6 +1001,9 @@ void Estimator::optimization()
 
     double2vector();
 
+//    TicToc t_culling;
+//    f_manager.removeLineOutlier(Ps, Rs, tic,ric);   // remove Line outlier
+//    ROS_INFO("culling line feautre: %f ms", t_culling.toc());
 
     TicToc t_whole_marginalization;
     if (marginalization_flag == MARGIN_OLD)
@@ -1358,7 +1361,8 @@ void Estimator::slideWindowOld()
     else
         f_manager.removeBack();
 
-    f_manager.removeLineBack();
+//    f_manager.removeLineBack();
+    f_manager.removeLineBack(Ps, Rs, tic, ric);
 }
 
 void Estimator::setReloFrame(double _frame_stamp, int _frame_index, vector<Vector3d> &_match_points, Vector3d _relo_t, Matrix3d _relo_r)

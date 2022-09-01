@@ -21,6 +21,7 @@ ros::Publisher pub_keyframe_line, pub_keyframe_line_stereo;
 ros::Publisher pub_keyframe_line_2d;
 ros::Publisher pub_keyframe_2d_3d;
 ros::Publisher pub_line_margin;
+ros::Publisher pub_line_margin_obs;
 ros::Publisher pub_line_deg;
 ros::Publisher pub_line_array;
 ros::Publisher pub_text;
@@ -35,6 +36,9 @@ visualization_msgs::Marker map_lines;
 visualization_msgs::Marker margin_lines;
 visualization_msgs::Marker margin_lines_deg;
 visualization_msgs::MarkerArray text_array;
+
+visualization_msgs::Marker margin_obs;
+
 
 std::vector<visualization_msgs::Marker> margin_line_list;
 std::vector<ros::Publisher> pub_margin_line_list;
@@ -69,6 +73,7 @@ void registerPub(ros::NodeHandle &n)
     pub_keyframe_line_2d = n.advertise<visualization_msgs::Marker>("keyframe_lines_2d", 1000);
     pub_line_cloud = n.advertise<visualization_msgs::Marker>("line_cloud", 1000);
     pub_line_margin = n.advertise<visualization_msgs::Marker>("line_history_cloud", 1000);
+    pub_line_margin_obs = n.advertise<visualization_msgs::Marker>("line_history_lines_obs", 1000);
     pub_line_deg = n.advertise<visualization_msgs::Marker>("degenerated_line", 1000);
     pub_line_array = n.advertise<visualization_msgs::MarkerArray>("line_history_clouds", 1000);
     pub_text = n.advertise<visualization_msgs::MarkerArray>("line_text",1000);
@@ -382,7 +387,7 @@ void pubLineCloud(const Estimator &estimator, std_msgs::Header &header)
             Rotation_psi = roll * pitch * yaw; // [n, d, (n X d) / (|| n X d ||)
             double pi = it_per_id.orthonormal_vec(3);//atan2(n_w.norm(), d_w.norm());
 
-            Vector3d n_w = cos(pi) * Rotation_psi.block<3,1>(0,0);//???
+            Vector3d n_w = cos(pi) * Rotation_psi.block<3,1>(0,0);//cos(theta) * n ?
             Vector3d d_w = sin(pi) * Rotation_psi.block<3,1>(0,1);
 
             Matrix<double, 6, 1> line_w;
@@ -467,6 +472,22 @@ void pubLineCloud(const Estimator &estimator, std_msgs::Header &header)
     margin_lines.color.a = 1.0;
 //    ROS_INFO("margin_lines.point: %d", margin_lines.points.size());
 
+    {
+        margin_obs.header = header;
+        margin_obs.header.frame_id = "world";
+        margin_obs.ns = "margin_lines_obs";
+        margin_obs.type = visualization_msgs::Marker::LINE_LIST;
+        margin_obs.action = visualization_msgs::Marker::ADD;
+        margin_obs.pose.orientation.w = 1.0;
+        margin_obs.lifetime = ros::Duration(0);
+
+        margin_obs.scale.x = 0.1;
+        margin_obs.color.r = 0.8;
+        margin_obs.color.g = 0.5; //green
+        margin_obs.color.b = 0.0;
+        margin_obs.color.a = 1.0;
+    }
+
     for(auto &it_per_id : estimator.f_manager.line_feature)
     {
         int used_num = it_per_id.line_feature_per_frame.size();
@@ -506,6 +527,136 @@ void pubLineCloud(const Estimator &estimator, std_msgs::Header &header)
             Matrix<double, 6, 1> line_w;
             line_w.block<3,1>(0,0) = n_w;
             line_w.block<3,1>(3,0) = d_w;
+
+            {
+                //target point
+                double t_min = 0, t_max = 0;
+                Vector3d point_on_line;
+                bool have_a_point = false;
+                Vector3d start_w, end_w;
+                geometry_msgs::Point sp, ep;
+//                ROS_WARN("R_wc: %d, t_wc: %d, pi_c: %d", it_per_id.Rs.size(), it_per_id.Ps.size(), it_per_id.pi_c.size());
+                for (int j = 0; j < it_per_id.pi_c.size(); ++j) {
+
+                    Matrix3d R_wc = it_per_id.Rs[j / 2];
+                    Vector3d t_wc = it_per_id.Ps[j / 2];
+                    const Vector3d &pi_c = it_per_id.pi_c[j];
+                    if (isnan(pi_c(0)) || isnan(pi_c(1)) || isnan(pi_c(2)) ||
+                        isinf(pi_c(0)) || isinf(pi_c(1)) || isinf(pi_c(2)))
+                        continue;
+
+                    Matrix<double, 6, 6> T_cw;
+                    T_cw.setZero();
+                    T_cw.block<3, 3>(0, 0) = R_wc.transpose();
+                    T_cw.block<3, 3>(0, 3) = Utility::skewSymmetric(-R_wc.transpose() * t_wc) * R_wc.transpose();
+                    T_cw.block<3, 3>(3, 3) = R_wc.transpose();
+
+                    Matrix<double, 6, 1> line_c = T_cw * line_w;
+                    Vector3d n_c = line_c.block<3, 1>(0, 0);
+                    Vector3d d_c = line_c.block<3, 1>(3, 0);
+
+                    Matrix4d L_c;
+                    L_c.setZero();
+                    L_c.block<3, 3>(0, 0) = Utility::skewSymmetric(n_c);
+                    L_c.block<3, 1>(0, 3) = d_c;
+                    L_c.block<1, 3>(3, 0) = -d_c.transpose();
+
+                    Vector4d pi_s_4d;
+                    pi_s_4d.head(3) = pi_c;
+                    pi_s_4d(3) = 0;
+//                    ROS_WARN("pi_s_4d(%f, %f, %f)", pi_s_4d(0), pi_s_4d(1), pi_s_4d(2));
+                    Vector4d D_s = L_c * pi_s_4d;
+//                    ROS_WARN("D_s(%f, %f, %f)", D_s(0), D_s(1), D_s(2));
+
+                    Vector3d D_s_3d(D_s(0) / D_s(3), D_s(1) / D_s(3), D_s(2) / D_s(3));
+
+                    Vector3d D_s_w = R_wc * D_s_3d + t_wc;
+//                    ROS_WARN("D_s_w (%f, %f, %f)", D_s_w(0), D_s_w(1), D_s_w(2));
+
+                    if (isnan(D_s_w(0)) || isnan(D_s_w(1)) || isnan(D_s_w(2)) || D_s_3d(2) < 0)
+                        continue;
+
+                    if (!have_a_point) {
+                        have_a_point = true;
+                        point_on_line = D_s_w;
+                        start_w = D_s_w;
+                        end_w = D_s_w;
+                    } else {
+                        Vector3d delta_p = D_s_w - point_on_line;
+//                    ROS_WARN("delta_p t %f, %f, %f", delta_p.x() / d_w.x(), delta_p.y() / d_w.y(), delta_p.z() / d_w.z());
+                        double t_now = delta_p.x() / d_w.x();
+                        if (t_now < t_min) {
+                            t_min = t_now;
+                            start_w = D_s_w;
+                        }
+                        if (t_now > t_max) {
+                            t_max = t_now;
+                            end_w = D_s_w;
+                        }
+                    }
+//                Vector3d start_obs_w = point_on_line + t_min * d_w;
+//                Vector3d end_obs_w = point_on_line + t_max * d_w;
+                    sp.x = start_w(0);
+                    sp.y = start_w(1);
+                    sp.z = start_w(2);
+                    ep.x = end_w(0);
+                    ep.y = end_w(1);
+                    ep.z = end_w(2);
+                }
+
+
+//                Matrix4d L_c_w;
+//                L_c_w.setZero();
+//                L_c_w.block<3, 3>(0, 0) = Utility::skewSymmetric(n_w);
+//                L_c_w.block<3, 1>(0, 3) = d_w;
+//                L_c_w.block<1, 3>(3, 0) = -d_w.transpose();
+//                Vector4d point_homo = L_c_w * it_per_id.n_d_w[0];
+//                double t_min = 0, t_max = 0;
+//                Vector3d point_on_line;
+//                bool have_a_point = false;
+//                Vector3d start_w, end_w;
+//                geometry_msgs::Point sp, ep;
+//                for (int j = 0; j < it_per_id.n_d_w.size(); ++j) {
+//                    const Vector4d& n_d_w = it_per_id.n_d_w[j];
+//                    if (isnan(n_d_w(0)) || isnan(n_d_w(1)) || isnan(n_d_w(2)) || isnan(n_d_w(3)) ||
+//                        isinf(n_d_w(0)) || isinf(n_d_w(1)) || isinf(n_d_w(2)) || isinf(n_d_w(3)))
+//                        continue;
+//
+//                    point_homo = L_c_w * n_d_w;
+//                    Vector3d point(point_homo(0) / point_homo(3), point_homo(1) / point_homo(3),
+//                                   point_homo(2) / point_homo(3));
+//                    if (isnan(point(0)) || isnan(point(1)) || isnan(point(2)) || point(2) < 0)
+//                        continue;
+//
+//                    if (!have_a_point) {
+//                        have_a_point = true;
+//                        point_on_line = point;
+//                        start_w = point;
+//                        end_w = point;
+//                    } else {
+//                        Vector3d delta_p = point - point_on_line;
+//    //                    ROS_WARN("delta_p t %f, %f, %f", delta_p.x() / d_w.x(), delta_p.y() / d_w.y(), delta_p.z() / d_w.z());
+//                        double t_now = delta_p.x() / d_w.x();
+//                        if (t_now < t_min) {
+//                            t_min = t_now;
+//                            start_w = point;
+//                        }
+//                        if (t_now > t_max) {
+//                            t_max = t_now;
+//                            end_w = point;
+//                        }
+//                    }
+//                }
+//
+//                sp.x = start_w(0); sp.y = start_w(1); sp.z = start_w(2);
+//                ep.x = end_w(0); ep.y = end_w(1); ep.z = end_w(2);
+
+                if (have_a_point)
+                {
+                    margin_obs.points.emplace_back(sp);
+                    margin_obs.points.emplace_back(ep);
+                }
+            }
 
             Matrix<double, 6, 6> T_cw;
             T_cw.setZero();
@@ -605,6 +756,8 @@ void pubLineCloud(const Estimator &estimator, std_msgs::Header &header)
         }
     }
 
+    if (pub_line_margin_obs.getNumSubscribers() != 0)
+        pub_line_margin_obs.publish(margin_obs);
     pub_line_margin.publish(margin_lines);
     pub_line_deg.publish(margin_lines_deg);
     publishAll(pub_margin_line_list, margin_line_list);

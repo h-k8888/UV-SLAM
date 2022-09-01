@@ -342,7 +342,7 @@ void img_callback(const sensor_msgs::ImageConstPtr &img_msg)
                     double len = std::min(1.0, 1.0 * lineTrackerData.track_cnt[j] / WINDOW_SIZE);
                     cv::Point sp = Point(lineTrackerData.curr_keyLine[j].startPointX, lineTrackerData.curr_keyLine[j].startPointY);
                     cv::Point ep = Point(lineTrackerData.curr_keyLine[j].endPointX, lineTrackerData.curr_keyLine[j].endPointY);
-                    line(ptr_line->image, sp, ep, Scalar(255*(1-len), 0, 255*len), 2);
+                    line(ptr_line->image, sp, ep, Scalar(255*(1-len), 0, 255*len), 2); //越红追踪越久
                 }
 
             }
@@ -352,14 +352,14 @@ void img_callback(const sensor_msgs::ImageConstPtr &img_msg)
     }
     sum_time += t_r.toc();
     mean_time = sum_time/frame_cnt;
-    ROS_INFO("whole Line feature tracker processing costs: %f", mean_time);
+    ROS_INFO("whole feature tracker processing costs: %f", mean_time);
 }
 
 int main(int argc, char **argv)
 {
     ros::init(argc, argv, "feature_tracker");
     ros::NodeHandle n("~");
-    ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Debug);
+    ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Info);
     readParameters(n);
 
     for (int i = 0; i < NUM_OF_CAM; i++)
