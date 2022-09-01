@@ -37,6 +37,64 @@ using namespace line_descriptor;
 typedef line_descriptor::BinaryDescriptor LineBD;
 typedef line_descriptor::KeyLine LineKL;
 
+struct Line
+{
+    Point2f start_xy;//endpoints xy in image frame, undistort
+    Point2f end_xy;
+
+    Point2f start_xy_visual, end_xy_visual;
+
+    Point2f StartPt;
+    Point2f EndPt;
+    float lineWidth;
+    Point2f Vp;
+
+    Point2f Center;
+    Point2f unitDir; // [cos(theta), sin(theta)]
+    float length;
+    float theta; //radius
+
+    // para_a * x + para_b * y + c = 0
+    float para_a;
+    float para_b;
+    float para_c;
+
+    float image_dx;
+    float image_dy;
+    float line_grad_avg;
+
+    float xMin;
+    float xMax;
+    float yMin;
+    float yMax;
+    unsigned short id;
+    int colorIdx;
+
+    bool start_predict_fail = false;
+    bool end_predict_fail = false;
+
+    bool updated_forwframe = false;
+    bool extended = false;
+
+    int num_untracked = 0;
+
+    enum valid_type {
+        valid = 1,
+        too_short = 2,
+        bad_ZNCC = 3,
+        line_out_of_view = 4,
+        endpoint_out_of_image = 5,
+        bad_gradient_direction = 6,
+        bad_prediction = 7,
+        large_untracked = 8
+    };
+
+    valid_type is_valid = valid;
+
+    deque<Point2f> sample_points_undistort; //纠正后图像中的采样点
+
+};
+
 class LineFeatureTracker
 {
   public:
@@ -71,6 +129,22 @@ class LineFeatureTracker
     Mat prev_img, curr_img, forw_img;
     Mat curr_descriptor, m_matched_descriptor;
 
+    //////hk
+    cv::Mat dxImg, dyImg, gradient_dir; // degree
+    int allfeature_cnt;                  // 用来统计整个地图中有了多少条线，它将用来赋值
+    int last_feature_count = -1;
+    vector<Line> curr_line, forw_line;
+    vector<cv::Point2f> prev_pts, cur_pts, forw_pts;//线特征端点坐标
+    vector<Line> lines_predict;
+    vector< int > lineID; //当前帧索引 --> 全局索引
+    vector< int > prev_lineID; //当前帧索引 --> 全局索引
+    //NMS extend length in ELSED(vertical)
+    int nms_extend = 15;
+    //max lines in every frame
+    int max_lines_num = 50;
+
+    ////////hk
+
     vector<Point2f> curr_start_pts, curr_end_pts;
     vector<line_descriptor::KeyLine> curr_keyLine, forw_keyLine, m_matched_keyLines;
 
@@ -81,6 +155,46 @@ class LineFeatureTracker
     vector<Point2f> start_pts_velocity, end_pts_velocity;
     vector<Point2f> prev_start_un_pts, curr_start_un_pts, prev_end_un_pts, curr_end_un_pts; // not sure
     Vector3d vp;
+
+
+    void getUndistortEndpointsXY(const vector<Line>& lines, vector<cv::Point2f>& endpoints);
+    void getUndistortSample(const vector<Line>& lines, vector<cv::Point2f>& points, std::vector<int>& point2lineIdx);
+    void initLinesPredict();
+    void rejectWithF(vector<uchar>& status);
+    void markFailEndpoints(const vector<uchar>& status);
+    void markFailSamplePoints(const vector<uchar>& status, vector<int>& point2lineIdx);
+    void checkEndpointsAndUpdateLinesInfo();
+    void checkOpticalFlowEndpoints(vector<Line>& lines, const vector<Point2f>& endpoints);
+    void checkAndUpdateEndpoints(vector<Line>& lines);
+
+    void MakeALine( cv::Point2f start_pts, cv::Point2f end_pts, const int& rows, const int& cols, Line& line);
+    void MakeALine(cv::Point2f start_pts, cv::Point2f end_pts, Line& line);
+    void reduceLine(vector<Line> &lines, vector<int>& IDs);
+    void fitLinesBySamples(std::vector<Line>& lines);
+    void extractELSEDLine(const Mat &img, vector<Line>& lines, vector<Line>& lines_exist);
+
+    bool checkMidPointDistance(const cv::Point2f& start_i, const cv::Point2f& end_i,
+                               const cv::Point2f& start_j,const cv::Point2f& end_j, const float threshold = 5.0);
+    float point2line(const cv::Point2f& p, const cv::Point2f& start_l, const cv::Point2f& end_l) {
+        const Point2f sp(p - start_l);
+        const Point2f se(end_l - start_l);
+        return abs(sp.cross(se) / norm(se));
+    }
+    void updateTrackingLinesAndID();
+    void checkGradient(std::vector<Line>& lines, const int& start_idx = 0);
+    bool largeGradientAngle(const float& line_angle, const float& x, const float& y, const float& threshold = 20.0);
+
+    void Line2KeyLine(const vector<Line>& lines_in, vector<LineKL>& lines_out);
+    void KeyLine2Line(const vector<LineKL>&lines_in, vector<Line>&  lines_out);
+
+    void correctNegativeXY(cv::Point2f& start_pts, cv::Point2f& end_pts);
+    void correctOutsideXY(cv::Point2f& start_pts, cv::Point2f& end_pts, const int& rows, const int& cols);
+
+//    void LineFeatureTracker::visualize_line(const Mat &imageMat1, const FrameLinesPtr frame, const string &name, const bool show_NMS_area);
+    void visualize_line(const Mat &imageMat1, const std::vector<Line>& lines, const string &name, const bool show_NMS_area = false);
+    void DrawRotatedRectangle(cv::Mat& image, const cv::Point2f& centerPoint, const cv::Size& rectangleSize,
+                              const float& rotationDegrees, const int& val = 144);
+    void fillRectangle(Mat& img, const Point2f* pts, int npts, const void* color);
 
 
     static int n_id;

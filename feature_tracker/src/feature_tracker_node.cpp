@@ -50,6 +50,9 @@ void img1_callback(const sensor_msgs::ImageConstPtr &img_msg){
         cam1_ptr = cv_bridge::toCvCopy(img_msg, sensor_msgs::image_encodings::MONO8);
 }
 
+double frame_cnt = 0;
+double sum_time = 0.0;
+double mean_time = 0.0;
 void img_callback(const sensor_msgs::ImageConstPtr &img_msg)
 {
     if(first_image_flag)
@@ -107,6 +110,8 @@ void img_callback(const sensor_msgs::ImageConstPtr &img_msg)
 
     cv::Mat show_img = ptr->image;
     TicToc t_r;
+    frame_cnt++;
+
     for (int i = 0; i < NUM_OF_CAM; i++)
     {
         ROS_DEBUG("processing camera %d", i);
@@ -345,14 +350,16 @@ void img_callback(const sensor_msgs::ImageConstPtr &img_msg)
             pub_linematch.publish(ptr_line->toImageMsg());
         }
     }
-    //ROS_INFO("whole feature tracker processing costs: %f", t_r.toc());
+    sum_time += t_r.toc();
+    mean_time = sum_time/frame_cnt;
+    ROS_INFO("whole Line feature tracker processing costs: %f", mean_time);
 }
 
 int main(int argc, char **argv)
 {
     ros::init(argc, argv, "feature_tracker");
     ros::NodeHandle n("~");
-    ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Info);
+    ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Debug);
     readParameters(n);
 
     for (int i = 0; i < NUM_OF_CAM; i++)

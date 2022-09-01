@@ -12,9 +12,61 @@ int keyLine_id = 0;
 int img_num = 0;
 
 upm::ELSED elsed;
+const int LINE_MAX_UNTRACKED = 5;
+
+bool inBorder(const cv::Point2f &pt, const int& row, const int& col)
+{
+    const int BORDER_SIZE = 1;
+    int img_x = cvRound(pt.x);
+    int img_y = cvRound(pt.y);
+    return BORDER_SIZE <= img_x && img_x < col - BORDER_SIZE && BORDER_SIZE <= img_y && img_y < row - BORDER_SIZE;
+}
+
+void visualize_line_samples_undistort(const Mat &imageMat1, const std::vector<Line>& lines_in, const string &name)
+{
+    //	Mat img_1;
+    cv::Mat img1;
+    if (imageMat1.channels() != 3){
+        cv::cvtColor(imageMat1, img1, cv::COLOR_GRAY2BGR);
+    }
+    else{
+        img1 = imageMat1;
+    }
+
+    //    srand(time(NULL));
+    int lowest = 0, highest = 255;
+    int range = (highest - lowest) + 1;
+    for (int k = 0; k < lines_in.size(); ++k)
+    {
+        Line line1 = lines_in[k];  // trainIdx
+        unsigned int r = lowest + int(rand() % range);
+        unsigned int g = lowest + int(rand() % range);
+        unsigned int b = lowest + int(rand() % range);
+
+        //line
+        cv::Point2f startPoint = line1.start_xy;
+        cv::Point2f endPoint = line1.end_xy;
+        cv::line(img1, startPoint, endPoint, cv::Scalar(r, g, b),2 ,8);
+
+        //sample points
+        for (const Point2f& p : line1.sample_points_undistort)
+            cv::circle(img1, p, 2, cv::Scalar(r, g, b), 4);
+
+        //start mid end point
+        // b g r
+//        cv::circle(img1, startPoint, 2, cv::Scalar(255, 0, 0), 5);
+//        cv::circle(img1, endPoint, 2, cv::Scalar(0, 0, 255), 5);
+//        cv::circle(img1, 0.5 * startPoint + 0.5 * endPoint, 2, cv::Scalar(0, 255, 0), 5);
+    }
+
+    imshow(name, img1);
+    waitKey(1);
+}
+
 
 LineFeatureTracker::LineFeatureTracker()
 {
+    allfeature_cnt = 0;
 }
 
 void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
@@ -46,11 +98,11 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
         forw_img = forw_img.colRange(COL_MARGIN, COL - COL_MARGIN);
     }
 
-    Mat img1 = curr_img.clone();
-    Mat img2 = forw_img.clone();
-    Mat merged_img;
-    cvtColor(img1, img1, CV_GRAY2BGR);
-    cvtColor(img2, img2, CV_GRAY2BGR);
+//    Mat img1 = curr_img.clone();
+//    Mat img2 = forw_img.clone();
+//    Mat merged_img;
+//    cvtColor(img1, img1, CV_GRAY2BGR);
+//    cvtColor(img2, img2, CV_GRAY2BGR);
 //    cvtColor(merged_img, merged_img, CV_GRAY2BGR);
 
     vector<Vector3d> para_vector;
@@ -65,295 +117,132 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
     vector<int> local_vp_ids;
     double thAngle = 1.0 / 180.0 * CV_PI;
 
-    //上一帧已探测到直线
-    if(curr_keyLine.size()>0)
-    {
-        vector<uchar> status;
-        vector<DMatch> good_match_vector, good_match_vector2;
-        vector<Point2f> forw_start_pts, forw_end_pts;
-        Mat forw_descriptor;
+    TicToc t_gr;
+    cv::Sobel(forw_img, dxImg, CV_16SC1, 1, 0, 3, 1, 0, cv::BORDER_REPLICATE);
+    cv::Sobel(forw_img, dyImg, CV_16SC1, 0, 1, 3, 1, 0, cv::BORDER_REPLICATE);
+//    ROS_DEBUG("cv::Sobel cost: %f ms", t_gr.toc());
 
-        TicToc t_r;
-        //线特征提取，计算LBD描述子
-        lineExtraction(forw_img, forw_keyLine, forw_descriptor);
-        double t_extraction = t_r.toc();
-        //LBD描述子匹配线特征
-        lineMatching(curr_keyLine, forw_keyLine, curr_descriptor, forw_descriptor, good_match_vector);
-        double t_matching = t_r.toc() - t_extraction;
-//        cout << t_extraction << ", " << t_matching << endl;
-//        double t_linematching = t_r.toc() - t_lineextraction;
-//        lineMergingTwoPhase( curr_img, forw_img, curr_keyLine, forw_keyLine, curr_descriptor, forw_descriptor, good_match_vector );
-//        double t_linemerging = t_r.toc() - t_linematching;
+    //上一帧已探测到直线
+    if(curr_keyLine.size()>0)//todo curr_line
+    {
+        last_feature_count = allfeature_cnt - 1; //上一帧最大特征id
+
+        //get current frame endpoints
+        int num_lines_curr = curr_line.size();
+        getUndistortEndpointsXY(curr_line, cur_pts);
+        ROS_DEBUG("cur_pts.size(): %d", cur_pts.size());
+//        visualize_line_samples_undistort(curr_img, curr_line, "last frame");
+//        visualize_line_samples_undistort(forw_img, curr_line, "curr_line forw frame");
+
+        // add sample points to cur_pts
+        std::vector<Point2f> cur_samples;
+        std::vector<int> point2line_idx; //point  --->  line local index
+        getUndistortSample(curr_line, cur_samples, point2line_idx);
+        cur_pts.insert(cur_pts.end(), cur_samples.begin(), cur_samples.end());
+
+        TicToc t_o; // optical flow predict line edpoints
+        vector<uchar> status;
+        vector<float> err;
+        //predict endpoints using LK optical flow
+        if (!cur_pts.empty())
+        {
+            forw_pts.clear();
+            cv::calcOpticalFlowPyrLK(curr_img, forw_img, cur_pts, forw_pts, status, err,
+                                     cv::Size(21, 21), 3);
+        }
+        ROS_DEBUG("temporal optical flow costs: %fms", t_o.toc());
+
+        initLinesPredict(); // set lines_predict
+        vector<uchar> status_f;
+        rejectWithF(status_f);
+        ROS_ASSERT(status.size() == status_f.size());
+        for (int i = 0; i < (int)status.size(); ++i) {
+            if (!status_f[i])
+                status[i] = 0;
+        }
+        markFailEndpoints(status);
+        ROS_DEBUG("markFailSamplePoints");
+        markFailSamplePoints(status, point2line_idx);
+        ROS_DEBUG("markFailSamplePoints, done");
+        checkEndpointsAndUpdateLinesInfo();
+//        visualize_line_samples_undistort(forw_img, lines_predict, "optical before reduce line");
+
+        //Remove lines with insufficient sampling points
+        reduceLine(lines_predict, prev_lineID);
+//        visualize_line_samples_undistort(forw_img, lines_predict, "optical after reduce line");
+
+
+        fitLinesBySamples(lines_predict);
+//        visualize_line_samples_undistort(forw_img, lines_predict, "fit line curr --> forw");
+
+
+        //    lineExtraction(img, lsd);
+        ROS_DEBUG("ELSED: begin.");
+        TicToc t_elsed;
+        //enough num of lines
+//    if (lines_predict.size() < max_lines_num)
+//        visualize_line_samples_undistort(forw_img, lines_predict, "optical");
+//        lines_predict.clear();
+//        prev_lineID.clear();
+//        tmp_track_cnt.clear();
+        extractELSEDLine(forw_img, forw_line, lines_predict);
+        ROS_DEBUG("line ELSED costs: %fms, new lines: %d.", t_elsed.toc(), forw_line.size());
+//        visualize_line(forw_img, forw_line, "new lines forwframe");
+//        visualize_line(forw_img, lines_predict, "lines predict", false);
+
+        //reduce lines with larage num_untracked
+        reduceLine(lines_predict, prev_lineID);
+
+        ROS_DEBUG("updateTrackingLinesAndID");
+        updateTrackingLinesAndID();
+//        TicToc t_vis_line_new;
+//        visualize_line(forwframe_->img, forwframe_, "lines forward");
+//        visual_time += t_vis_line_new.toc();
+        ROS_DEBUG("updateTrackingLinesAndID, done");
+
+        TicToc t_gr;
+        ROS_DEBUG("check Sample Gradient");
+        checkGradient(forw_line);
+//        reduceLine(lines_predict, prev_lineID);
+        ROS_DEBUG("check Sample Gradient: %f ms", t_gr.toc());
+
+        Line2KeyLine(forw_line, forw_keyLine);
+        tmp_ids = lineID;
+
+//        vector<uchar> status;
+//        vector<DMatch> good_match_vector, good_match_vector2;
+        vector<Point2f> forw_start_pts, forw_end_pts;
+//        Mat forw_descriptor;
+//
+//        TicToc t_r;
+//        //线特征提取，计算LBD描述子
+//        lineExtraction(forw_img, forw_keyLine, forw_descriptor);
+//        double t_extraction = t_r.toc();
+//        //LBD描述子匹配线特征
+//        lineMatching(curr_keyLine, forw_keyLine, curr_descriptor, forw_descriptor, good_match_vector);
+//        double t_matching = t_r.toc() - t_extraction;
+////        cout << t_extraction << ", " << t_matching << endl;
+////        double t_linematching = t_r.toc() - t_lineextraction;
+////        lineMergingTwoPhase( curr_img, forw_img, curr_keyLine, forw_keyLine, curr_descriptor, forw_descriptor, good_match_vector );
+////        double t_linemerging = t_r.toc() - t_linematching;
 
         //如果新一帧有线特征
         if(forw_keyLine.size() > 1)
         {
             //计算曼哈顿世界的3个消失点
             getVPHypVia2Lines(forw_keyLine, para_vector, length_vector, orientation_vector, vpHypo);
+//            ROS_DEBUG("getVPHypVia2Lines");
             getSphereGrids(forw_keyLine, para_vector, length_vector, orientation_vector, sphereGrid );
+//            ROS_DEBUG("getSphereGrids");
             getBestVpsHyp(sphereGrid, vpHypo, tmp_vps);
+//            ROS_DEBUG("getBestVpsHyp");
             lines2Vps(forw_keyLine, thAngle, tmp_vps, clusters, local_vp_ids);
-//            double t_vp = t_r.toc() - t_linemerging;
-            //        drawClusters(img2, forw_keyLine, clusters);
+//            ROS_DEBUG("lines2Vps");
 
-//            const int model_size = 500;
-//            vector<Point2f> model_hypotheses;
-//            Mat tmp_img = forw_img.clone();
-//            cvtColor(forw_img, tmp_img, CV_GRAY2BGR);
-
-//            while(model_hypotheses.size() < model_size)
-//            {
-//                int a = rand()%(forw_keyLine.size());
-//                int b = rand()%(forw_keyLine.size());
-
-//                if(a == b)
-//                    continue;
-
-//                line_descriptor::KeyLine kl1 = forw_keyLine.at(a);
-//                line_descriptor::KeyLine kl2 = forw_keyLine.at(b);
-
-//                Vector3d sp1 = Vector3d(kl1.startPointX, kl1.startPointY, 1);
-//                Vector3d ep1 = Vector3d(kl1.endPointX, kl1.endPointY, 1);
-
-//                Vector3d sp2 = Vector3d(kl2.startPointX, kl2.startPointY, 1);
-//                Vector3d ep2 = Vector3d(kl2.endPointX, kl2.endPointY, 1);
-
-//                Vector3d line1 = sp1.cross(ep1);
-//                Vector3d line2 = sp2.cross(ep2);
-//                //            if(line1(2) == 0.0)
-//                //                line1(2) = 0.001;
-//                //            if(line2(2) == 0.0)
-//                //                line2(2) = 0.001;
-//                //            line1 = line1/line1(2);
-//                //            line2 = line2/line2(2);
-
-//                Vector3d vp = line1.cross(line2);
-//                if(vp(2) == 0.0)
-//                    vp(2) = 0.0011;
-//                vp = vp/vp(2);
-//                if(isnan(vp(0)) || isnan(vp(1)))
-//                    continue;
-
-//                model_hypotheses.push_back(Point2f(vp(0), vp(1)));
-//            }
-
-//            MatrixXd preference_matrix(forw_keyLine.size(), model_hypotheses.size());
-//            double th_angle = CV_PI * 3.0/180.0;
-//            double th_dist = 0.9;
-//            preference_matrix.setZero();
-
-//            for(int i = 0; i < model_hypotheses.size(); i++)
-//            {
-//                Point2f vp = model_hypotheses[i];
-//                for(int j = 0; j < forw_keyLine.size(); j++)
-//                {
-//                    Point2f sp(forw_keyLine[j].getStartPoint());
-//                    Point2f ep(forw_keyLine[j].getEndPoint());
-//                    Point2f mid = (sp + ep)/2;
-
-//                    double angle = SafeAcos((ep-vp).dot(sp-vp)/(norm(ep-vp)*norm(sp-vp)));
-//                    double mid_angle = SafeAcos((mid - vp).dot(ep-sp)/(norm(mid-vp)*norm(ep-sp)));
-//                    angle = min( CV_PI - angle, angle );
-//                    mid_angle = min( CV_PI - mid_angle, mid_angle );
-
-//                    if(mid_angle < th_angle)
-//                        preference_matrix(j, i) = 1;
-//                    else
-//                        preference_matrix(j, i) = 0;
-//                }
-//            }
-
-//            vector<VectorXd> cluster_sets;
-//            vector<int> cluster_ids;
-//            vector<int> counts;
-//            vector<Scalar> colors;
-
-//            for(int i = 0; i < forw_keyLine.size(); i++)
-//            {
-//                VectorXd ps = preference_matrix.row(i);
-//                if(cluster_sets.empty())
-//                {
-//                    cluster_sets.push_back(ps);
-//                    counts.push_back(1);
-//                    Scalar color = Scalar(rand()%255, rand()%255, rand()%255);
-//                    colors.push_back(color);
-//                    continue;
-//                }
-
-//                int min_id = -1;
-//                double min_dist = 1;
-//                for(int j = 0; j < cluster_sets.size(); j++)
-//                {
-//                    VectorXd cs = cluster_sets[j];
-//                    double j_dist = (Union_dist(ps, cs) - Intersection_dist(ps, cs))
-//                            /Union_dist(ps, cs);
-//                    //                cout << j_dist << endl;
-//                    if(j_dist < min_dist)
-//                    {
-//                        min_id = j;
-//                        min_dist = j_dist;
-//                    }
-//                }
-
-//                if(min_dist < th_dist)
-//                {
-//                    counts[min_id] += 1;
-//                    cluster_sets[min_id] = Intersection(ps, cluster_sets[min_id]);
-//                }
-//                else
-//                {
-//                    cluster_sets.push_back(ps);
-//                    counts.push_back(1);
-//                    Scalar color = Scalar(rand()%255, rand()%255, rand()%255);
-//                    colors.push_back(color);
-//                }
-//            }
-//            //        cout << cluster_sets.size() << endl;
-
-//            for(int i = counts.size()-1; i >= 0; i--)
-//            {
-//                if(counts[i] < 2)
-//                {
-//                    cluster_sets.erase(cluster_sets.begin() + i);
-//                    counts.erase(counts.begin() + i);
-//                }
-//            }
-//            //        cout << counts.size() << endl;
-
-//            for(int i = 0; i < forw_keyLine.size(); i++)
-//            {
-//                double min_dist = 1;
-//                int min_id = -1;
-//                for(int j = 0; j < cluster_sets.size(); j++)
-//                {
-//                    VectorXd ps = preference_matrix.row(i);
-//                    VectorXd cs = cluster_sets[j];
-//                    double j_dist = (Union_dist(ps, cs) - Intersection_dist(ps, cs))
-//                            /Union_dist(ps, cs);
-//                    if(j_dist < min_dist)
-//                    {
-//                        min_id = j;
-//                        min_dist = j_dist;
-//                    }
-//                }
-//                if(min_dist < th_dist)
-//                {
-//                    int myFontFace = 2;
-//                    double myFontScale = 0.5;
-//                    //                putText(tmp_img,to_string(min_id),(forw_keyLine[i].getStartPoint()+forw_keyLine[i].getEndPoint())/2,myFontFace,myFontScale,Scalar(0,255,0));
-//                    line(tmp_img, forw_keyLine[i].getStartPoint(), forw_keyLine[i].getEndPoint(), colors[min_id], 2);
-//                    line_vp_ids.push_back(min_id);
-//                }
-//                else
-//                {
-//                    line(tmp_img, forw_keyLine[i].getStartPoint(), forw_keyLine[i].getEndPoint(), Scalar(0,0,0), 2);
-//                    line_vp_ids.push_back(-1);
-//                }
-//            }
-
-//            vector<vector<KeyLine>> cluster_lines(counts.size());
-//            for(int i = 0; i < forw_keyLine.size(); i++)
-//            {
-//                KeyLine kl = forw_keyLine[i];
-//                int line_vp_id = line_vp_ids[i];
-//                if(line_vp_id != -1)
-//                {
-//                    cluster_lines[line_vp_id].push_back(kl);
-//                }
-//            }
-
-//        cluster_vps.clear();
-//        for(int i = 0; i < counts.size(); i++)
-//        {
-//            if(cluster_lines[i].size() == 0)
-//            {
-//                cluster_vps.push_back(Vector3d(0,0,0));
-//                continue;
-//            }
-//            int count = 0;
-//            Vector3d vp_mean(0,0,0);
-//            while(count < 10)
-//            {
-//                int a = rand()%(counts[i]);
-//                int b = rand()%(counts[i]);
-
-//                if(a == b)
-//                    continue;
-
-//                line_descriptor::KeyLine kl1 = cluster_lines[i][a];
-//                line_descriptor::KeyLine kl2 = cluster_lines[i][b];
-
-//                Vector3d sp1 = Vector3d(kl1.startPointX, kl1.startPointY, 1);
-//                Vector3d ep1 = Vector3d(kl1.endPointX, kl1.endPointY, 1);
-
-//                Vector3d sp2 = Vector3d(kl2.startPointX, kl2.startPointY, 1);
-//                Vector3d ep2 = Vector3d(kl2.endPointX, kl2.endPointY, 1);
-
-//                Vector3d line1 = sp1.cross(ep1);
-//                Vector3d line2 = sp2.cross(ep2);
-
-////                if(line1(2) == 0.0)
-////                    line1(2) = 0.001;
-////                if(line2(2) == 0.0)
-////                    line2(2) = 0.001;
-////                line1 = line1/line1(2);
-////                line2 = line2/line2(2);
-
-//                Vector3d vp = line1.cross(line2);
-//                if(vp(2) == 0.0)
-//                    vp(2) = 0.0011;
-
-//                vp = vp/vp(2);
-//                if(isnan(vp(0)) || isnan(vp(1)))
-//                    continue;
-
-//                vp_mean = vp_mean + vp;
-//                count++;
-//            }
-//            vp_mean = vp_mean/10;
-//            cluster_vps.push_back(vp_mean);
-//        }
-
-//        imshow("1", tmp_img);
-//        waitKey(1);
-//        string a = "/home/hyunjun/image/" + to_string(image_id) + "_Jlinkage" +".png";
-//        imwrite(a, tmp_img);
-
-//        tmp_img = forw_img.clone();
-//        cvtColor(forw_img, tmp_img, CV_GRAY2BGR);
-
-//        for ( int i=0; i<forw_keyLine.size(); ++i )
-//        {
-//            int idx = i;
-//            cv::Point2f pt_s = forw_keyLine[i].getStartPoint();
-//            cv::Point2f pt_e = forw_keyLine[i].getEndPoint();
-
-//            cv::line( tmp_img, pt_s, pt_e, cv::Scalar(0,0,0), 2, CV_AA );
-//        }
-
-//        std::vector<cv::Scalar> lineColors( 3 );
-//        lineColors[0] = cv::Scalar( 0, 0, 255 );
-//        lineColors[1] = cv::Scalar( 0, 255, 0 );
-//        lineColors[2] = cv::Scalar( 255, 0, 0 );
-//        for ( int i = 0; i < clusters.size(); ++i )
-//        {
-//            for ( int j = 0; j < clusters[i].size(); ++j )
-//            {
-//                int idx = clusters[i][j];
-
-//                cv::Point2f pt_s = forw_keyLine[idx].getStartPoint();
-//                cv::Point2f pt_e = forw_keyLine[idx].getEndPoint();
-//                cv::line( tmp_img, pt_s, pt_e, lineColors[i], 2, CV_AA );
-//            }
-//        }
-//        a = "/home/hyunjun/image/" + to_string(image_id) + "_manhattan" +".png";
-//        imwrite(a, tmp_img);
-
-//        image_id+=1;
         }
 
-        tmp_track_cnt.clear();
-        tmp_ids.clear();
+//        tmp_track_cnt.clear();
+//        tmp_ids.clear();
         tmp_vp_ids.push_back(-1);
         start_pts_velocity.clear();
         end_pts_velocity.clear();
@@ -369,18 +258,6 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
                 forw_start_pts.push_back( start_pts );
                 forw_end_pts.push_back(end_pts);
 
-//                if(line_vp_ids[i] == -1)
-//                    vps.push_back(Vector3d(0.0,0.0,0.0));
-//                else
-//                {
-//                    Vector3d vp = cluster_vps[line_vp_ids[i]];
-//                    Vector3d n_vp((vp(0) - pinhole_camera->getParameters().cx())/pinhole_camera->getParameters().fx(),
-//                                  (vp(1) - pinhole_camera->getParameters().cy())/pinhole_camera->getParameters().fy(),
-//                                  1.0);
-////                    if(isnan(n_vp(0)) || isnan(n_vp(1)))
-//                    vps.push_back(n_vp);
-//                }
-
                 if(!local_vp_ids.empty())
                 {
                     if(local_vp_ids[i] == 3)
@@ -389,41 +266,35 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
                         vps.push_back(tmp_vps[local_vp_ids[i]]/tmp_vps[local_vp_ids[i]](2)); //坐标归一化
                 }
 
-//                Vector3d a = tmp_vps[local_vp_ids[i]]/tmp_vps[local_vp_ids[i]](2);
-//                cout << "-----" << endl;
-//                cout << vps[i](0) << " " << vps[i](1) << " " << vps[i](2) << " " << endl;
-//                cout << a(0) << " " << a(1) << " " << a(2) << endl;
-
                 //TODO initialize tmp_index
-                tmp_track_cnt.push_back(1);
-                tmp_ids.push_back(-1);
+//                tmp_track_cnt.push_back(1);
+//                tmp_ids.push_back(-1);
                 tmp_vp_ids.push_back(-1);
                 start_pts_velocity.push_back({0, 0});
                 end_pts_velocity.push_back({0, 0});
             }
         }
-        vector<int> local2id;
+//        vector<int> local2id;
+//
+//        //bring ids & cnt of trackted lines and update tmp_index & tmp_cnt
+//        unsigned int num_tracked_line = 0;
+//        if(good_match_vector.size() > 0)
+//        {
+//            for(int i=0; i< good_match_vector.size(); i++)
+//            {
+////                tmp_vp_ids.at(good_match_vector.at(i).trainIdx)=vp_ids.at(good_match_vector.at(i).queryIdx);
+//                tmp_ids.at(good_match_vector.at(i).trainIdx)=ids.at(good_match_vector.at(i).queryIdx); //记录线 id
+//                tmp_track_cnt.at(good_match_vector.at(i).trainIdx)=track_cnt.at(good_match_vector.at(i).queryIdx)+1; //追踪次数+1
+//            }
+//        }
 
-        //bring ids & cnt of trackted lines and update tmp_index & tmp_cnt
-        unsigned int num_tracked_line = 0;
-        if(good_match_vector.size() > 0)
-        {
-            for(int i=0; i< good_match_vector.size(); i++)
-            {
-//                tmp_vp_ids.at(good_match_vector.at(i).trainIdx)=vp_ids.at(good_match_vector.at(i).queryIdx);
-                tmp_ids.at(good_match_vector.at(i).trainIdx)=ids.at(good_match_vector.at(i).queryIdx); //记录线 id
-                tmp_track_cnt.at(good_match_vector.at(i).trainIdx)=track_cnt.at(good_match_vector.at(i).queryIdx)+1; //追踪次数+1
-            }
-        }
-//        cout << "----" << endl;
-//        for(int i = 0; i < local2id.size(); i++)
-//            cout << i << " -> " << local2id[i] << endl;\
 
-        ids.clear();
+//        ids.clear();
         track_cnt.clear();
         vp_ids.clear();
 
-        ids = tmp_ids;
+//        ids = tmp_ids;
+//        ids = prev_lineID;
         track_cnt = tmp_track_cnt;
 //        vp_ids = local_vp_ids;
 
@@ -435,21 +306,46 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
         curr_start_pts = forw_start_pts;
         curr_end_pts = forw_end_pts;
         curr_keyLine = forw_keyLine;
-        curr_descriptor = forw_descriptor.clone();
+
+        curr_line = forw_line;
+//        curr_descriptor = forw_descriptor.clone();
     }
     else
     {
         curr_img = forw_img.clone();
-        lineExtraction(curr_img, curr_keyLine, curr_descriptor);
+
+        ROS_DEBUG("ELSED: begin.");
+        TicToc t_elsed;
+//        lineExtraction(curr_img, curr_keyLine, curr_descriptor);
+//        KeyLine2Line(curr_keyLine, curr_line);
+        lines_predict.clear();
+        extractELSEDLine(curr_img, curr_line, lines_predict);
+        if (curr_line.size() > max_lines_num)
+            curr_line.resize(max_lines_num);
+        Line2KeyLine(curr_line, curr_keyLine);
+        ROS_DEBUG("line ELSED costs: %fms, lines: %d.", t_elsed.toc(), curr_line.size());
+
+        TicToc t_gr;
+        ROS_DEBUG("check Sample Gradient");
+        checkGradient(curr_line);
+//        reduceLine(lines_predict, prev_lineID);
+        ROS_DEBUG("check Sample Gradient: %f ms", t_gr.toc());
+//        visualize_line_samples_undistort(curr_img, curr_line, "first frame");
 
         if(curr_keyLine.size() > 1)
         {
             getVPHypVia2Lines(curr_keyLine, para_vector, length_vector, orientation_vector, vpHypo);
+//            ROS_DEBUG("getVPHypVia2Lines, done");
             getSphereGrids(curr_keyLine, para_vector, length_vector, orientation_vector, sphereGrid );
+//            ROS_DEBUG("getSphereGrids, done");
             getBestVpsHyp(sphereGrid, vpHypo, tmp_vps);
+//            ROS_DEBUG("getBestVpsHyp, done");
             lines2Vps(curr_keyLine, thAngle, tmp_vps, clusters, local_vp_ids);
+//            ROS_DEBUG("lines2Vps, done");
         }
 //        drawClusters(img2, curr_keyLine, clusters);
+        ROS_DEBUG("compute vanishing point, done.");
+
 
         curr_start_pts.clear();
         curr_end_pts.clear();
@@ -491,6 +387,7 @@ void LineFeatureTracker::readImage4Line(const Mat &_img, double _cur_time)
         track_cnt.clear();
         ids = tmp_ids;
         track_cnt = tmp_track_cnt;
+        ROS_DEBUG("first frame, done");
     }
 
 //    float count = 0;
@@ -1993,6 +1890,7 @@ void LineFeatureTracker::getVPHypVia2Lines(vector<KeyLine> cur_keyLine, vector<V
     int numVp2 = 360;
     double stepVp2 = 2.0 * CV_PI / numVp2;
 
+    ROS_DEBUG("get the parameters of each line");
     // get the parameters of each line
     for ( int i = 0; i < num; ++i )
     {
@@ -2013,12 +1911,15 @@ void LineFeatureTracker::getVPHypVia2Lines(vector<KeyLine> cur_keyLine, vector<V
         orientation_vector.push_back(orientation);
     }
 
+    ROS_DEBUG("get vp hypothesis for each iteration");
     // get vp hypothesis for each iteration
     vpHypo = std::vector<std::vector<Vector3d> > ( it * numVp2, std::vector<Vector3d>(4) );
     int count = 0;
     srand((unsigned)time(NULL));
     for ( int i = 0; i < it; ++ i )
     {
+//        ROS_DEBUG("i = %d", i);
+
         int idx1 = rand() % num;
         int idx2 = rand() % num;
         while ( idx2 == idx1 )
@@ -2079,6 +1980,7 @@ void LineFeatureTracker::getVPHypVia2Lines(vector<KeyLine> cur_keyLine, vector<V
             count ++;
         }
     }
+    ROS_DEBUG("get vp hypothesis for each iteration, done");
 }
 
 void LineFeatureTracker::getSphereGrids(vector<KeyLine> cur_keyLine, vector<Vector3d> &para_vector, vector<double> &length_vector, vector<double> &orientation_vector, std::vector<std::vector<double> > &sphereGrid )
@@ -2371,4 +2273,1075 @@ void LineFeatureTracker::removeColumn(Eigen::MatrixXd& matrix, unsigned int colT
     if( colToRemove < numCols )
         matrix.block(0,colToRemove,numRows,numCols-colToRemove) = matrix.block(0,colToRemove+1,numRows,numCols-colToRemove);
     matrix.conservativeResize(numRows,numCols);
+}
+
+void LineFeatureTracker::getUndistortEndpointsXY(const vector<Line>& lines, vector<Point2f> &endpoints) {
+    endpoints.clear();
+    int lines_size = lines.size();
+    endpoints.resize(2 * lines_size);
+    for (int i = 0; i < lines_size; ++i)
+    {
+        endpoints[2 * i] = lines[i].start_xy;
+        endpoints[2 * i + 1] = lines[i].end_xy;
+    }
+}
+
+void LineFeatureTracker::getUndistortSample(const vector<Line>& lines, vector<cv::Point2f> &points, vector<int> &point2lineIdx) {
+    points.clear();
+    point2lineIdx.clear();
+    int lines_size = lines.size();
+    for (int i = 0; i < lines_size; ++i)
+        for (int j = 0; j < lines[i].sample_points_undistort.size(); ++j) {
+            points.emplace_back(lines[i].sample_points_undistort[j]);
+            point2lineIdx.emplace_back(i); //record local line index
+        }
+//    for (int i = 0; i < point2lineIdx.size(); ++i)
+//        ROS_DEBUG("point %d  --->  line local id %d", i, point2lineIdx[i]);
+
+}
+
+void LineFeatureTracker::initLinesPredict() {
+    lines_predict = curr_line;
+    for (Line& line : lines_predict)
+    {
+        line.start_predict_fail = false;
+        line.end_predict_fail = false;
+        line.updated_forwframe = false; //非新检测
+        line.extended = false;
+        line.sample_points_undistort.clear();
+    }
+    prev_lineID = ids;
+    tmp_track_cnt = track_cnt;
+//    ROS_DEBUG("lines_predict: %d, prev_lineID: %d, tmp_track_cnt: %d", lines_predict.size(), prev_lineID.size(), tmp_track_cnt.size());
+//
+//    ROS_ASSERT(lines_predict.size() == prev_lineID.size());
+
+    ROS_WARN("lines_predict");
+    for (int i = 0; i < lines_predict.size(); ++i)
+    {
+        const Line& l = lines_predict[i];
+        ROS_DEBUG("line local: %d , global: %d", i, prev_lineID[i]);
+    }
+}
+
+void LineFeatureTracker::rejectWithF(vector<uchar> &status) {
+    if (forw_pts.size() >= 8)
+    {
+        ROS_DEBUG("FM ransac begins");
+        status.clear();
+        TicToc t_f;
+        cv::Mat matrix_f =  cv::findFundamentalMat(cur_pts, forw_pts, cv::FM_RANSAC, F_THRESHOLD, 0.99, status);
+        ROS_DEBUG("FM ransac costs: %fms", t_f.toc());
+    }
+}
+
+void LineFeatureTracker::markFailEndpoints(const vector<uchar> &status) {
+    for (int i = 0; i < int(forw_pts.size()) && i < curr_line.size() * 2; i++)
+        if (!status[i] || !inBorder(forw_pts[i], forw_img.rows, forw_img.cols))
+        {
+//                ROS_WARN("status[%d] (%f, %f), (%f, %f)", i, forw_pts_tmp[i].x, forw_pts_tmp[i].y, forw_pts[i].x,forw_pts[i].y);
+            if (i % 2 == 0) {
+                lines_predict[i / 2].start_predict_fail = true;
+//                ROS_DEBUG("line %d start point (%f, %f) predict fail", i / 2, lines_predict[i/2].start_xy.x,lines_predict[i/2].start_xy.y);
+            }
+            else {
+                lines_predict[i / 2].end_predict_fail = true;
+//                ROS_DEBUG("line %d end point (%f, %f)predict fail", i / 2, lines_predict[i/2].start_xy.x,lines_predict[i/2].start_xy.y);
+            }
+            lines_predict[i / 2].is_valid = Line::bad_prediction;
+//            lines_predict[i / 2].is_valid = Line::endpoint_out_of_image;
+//            ROS_DEBUG("line %d predict fail", i / 2);
+        }
+}
+
+void LineFeatureTracker::markFailSamplePoints(const vector<uchar> &status, vector<int> &point2lineIdx) {
+    const int num_line_endpoints = lines_predict.size() * 2;
+    for (int i = 0; i < (int)point2lineIdx.size(); i++) {
+
+        int point_id = i + num_line_endpoints;
+        if (!status[point_id] || !inBorder(forw_pts[point_id], forw_img.rows, forw_img.cols))
+            continue;
+        const int& local_id = point2lineIdx[i];
+//        ROS_DEBUG("forw_pts %d (%f, %f) ---> line local id: %d", i, forw_pts[point_id].x, forw_pts[point_id].y, local_id);
+        lines_predict[local_id].sample_points_undistort.emplace_back(forw_pts[point_id]);
+    }
+}
+
+void LineFeatureTracker::checkEndpointsAndUpdateLinesInfo() {
+    //更新有效光流端点、直线信息
+    ROS_DEBUG("check Optical Flow Endpoints");
+    checkOpticalFlowEndpoints(lines_predict, forw_pts);
+
+    //处理顶点光流跟丟的直线
+    TicToc t_update;
+    ROS_DEBUG("check And Update Endpoints");
+    checkAndUpdateEndpoints(lines_predict);
+    ROS_DEBUG("check And Update Endpoints: %fms", t_update.toc());
+}
+
+void LineFeatureTracker::checkOpticalFlowEndpoints(vector<Line> &lines, const vector<Point2f> &endpoints) {
+    ROS_ASSERT(lines.size() * 2 <= endpoints.size());
+
+    for (int i = 0; i < lines.size(); ++i)
+    {
+        const Point2f& start = endpoints[2 * i];
+        const Point2f& end = endpoints[2 * i + 1];
+        //不一定准确，因为光流预测失败不能说明端点真的在图像外
+        if ((start.x < 0 && end.x < 0) || (start.x >= curr_img.cols && end.x >= curr_img.cols) ||
+            (start.y < 0 && end.y < 0) || (start.y >= curr_img.rows && end.y >= curr_img.rows))
+        {
+            lines[i].is_valid = Line::line_out_of_view;
+//            ROS_DEBUG("line[%d} out_of_view", i);
+            continue;
+        }
+
+        if (!lines[i].start_predict_fail && !lines[i].end_predict_fail)
+        {
+            //延伸顶点
+//            Point2f start_new, end_new;
+//            if (extendEndpoints(forwframe_->img, start, end, start_new, end_new))
+//                lines[i].extended = true;
+//            MakeALine(start_new, end_new, lines[i]); //update lines information
+            MakeALine(start, end, lines[i]); //update lines information
+//            ROS_DEBUG("line %d, start (%f, %f), end (%f, %f)", i, start.x, start.y, end.x, end.y);
+            lines[i].updated_forwframe = false;
+        }
+    }
+}
+
+void LineFeatureTracker::MakeALine(cv::Point2f start_pts, cv::Point2f end_pts, const int &rows, const int &cols,
+                                   Line &line) {
+    // Set start point(and octave)
+    if(start_pts.x > end_pts.x)
+        swap(start_pts, end_pts);
+
+    // correct endpoints
+    if (start_pts.x < 0 || start_pts.y < 0)
+    {
+//        ROS_DEBUG("correctNegativeXY: (%f. %f)", start_pts.x, start_pts.y);
+        correctNegativeXY(start_pts, end_pts);
+//        ROS_DEBUG("after correctNegativeXY: (%f. %f)", start_pts.x, start_pts.y);
+    }
+
+    if (end_pts.x >= cols || end_pts.y >= rows)
+    {
+//        ROS_DEBUG("correctOutsideXY end: (%f. %f)", end_pts.x, end_pts.y);
+        correctOutsideXY(start_pts, end_pts, rows, cols);
+//        ROS_DEBUG("after correctOutsideXY end: (%f. %f)", end_pts.x, end_pts.y);
+    }
+
+    if (start_pts.x >= cols || start_pts.y >= rows)
+    {
+//        ROS_DEBUG("correctOutsideXY start: (%f. %f)", start_pts.x, start_pts.y);
+        correctOutsideXY(end_pts, start_pts, rows, cols);
+//        ROS_DEBUG("after correctOutsideXY start: (%f. %f)", start_pts.x, start_pts.y);
+    }
+
+    line.start_xy = start_pts;
+//    keyLine.sPointInOctaveX = start_pts.x;
+//    keyLine.sPointInOctaveY = start_pts.y;
+
+    // Set end point(and octave)
+    line.end_xy = end_pts;
+//    keyLine.ePointInOctaveX = end_pts.x;
+//    keyLine.ePointInOctaveY = end_pts.y;
+
+    line.StartPt = line.start_xy;
+    line.EndPt = line.end_xy;
+
+    // Set angle
+    line.theta = atan2((end_pts.y-start_pts.y),(end_pts.x-start_pts.x));
+//    ROS_DEBUG(" line.theta  = %f",  line.theta / M_PI * 180);
+
+    // Set line length & response
+//    keyLine.lineLength = keyLine.numOfPixels = norm( Mat(end_pts), Mat(start_pts));
+    line.length = norm( Mat(end_pts), Mat(start_pts));
+
+//    keyLine.response = norm( Mat(end_pts), Mat(start_pts))/cols;
+
+    // Set octave
+//    keyLine.octave = 0;
+
+    // Set pt(mid point)
+    line.Center = (start_pts + end_pts)/2;
+
+    // Set size
+    line.unitDir = (end_pts - start_pts) / line.length;
+
+//    line.new_detect = true;
+}
+
+void LineFeatureTracker::MakeALine(cv::Point2f start_pts, cv::Point2f end_pts, Line &line) {
+//    // Set start point(and octave)
+    if(start_pts.x > end_pts.x)
+        swap(start_pts, end_pts);
+
+    line.start_xy = start_pts;
+
+//    keyLine.sPointInOctaveX = start_pts.x;
+//    keyLine.sPointInOctaveY = start_pts.y;
+
+    // Set end point(and octave)
+    line.end_xy = end_pts;
+//    keyLine.ePointInOctaveX = end_pts.x;
+//    keyLine.ePointInOctaveY = end_pts.y;
+
+    line.StartPt = line.start_xy;
+    line.EndPt = line.end_xy;
+
+    // Set angle
+    line.theta = atan2((end_pts.y-start_pts.y),(end_pts.x-start_pts.x));
+
+    // Set line length & response
+//    keyLine.lineLength = keyLine.numOfPixels = norm( Mat(end_pts), Mat(start_pts));
+    line.length = norm( Mat(end_pts), Mat(start_pts));
+
+//    keyLine.response = norm( Mat(end_pts), Mat(start_pts))/cols;
+
+    // Set octave
+//    keyLine.octave = 0;
+
+    // Set pt(mid point)
+    line.Center = (start_pts + end_pts)/2;
+
+    // Set size
+    line.unitDir = (end_pts - start_pts) / line.length;
+}
+
+void LineFeatureTracker::checkAndUpdateEndpoints(vector<Line> &lines) {
+
+    const float threshold = 0.85;
+    int i = 0;
+    for (Line& line : lines)
+    {
+        //todo 采样点和端点数量
+        if (line.sample_points_undistort.size() < 3) {
+            line.is_valid = Line::bad_prediction;
+            continue;
+        }
+
+//        ROS_DEBUG("line[%d]", i);
+
+        bool need_update = false;
+        //check start point
+//        if (line.start_predict_fail)
+        if (line.start_predict_fail || !inBorder(line.start_xy, forw_img.rows, forw_img.cols))
+        {
+            //todo
+            if (!line.sample_points_undistort.empty()) {
+                line.start_xy = line.sample_points_undistort.front();
+                need_update = true;
+            }
+
+
+////            for (int i = 1; i < line.sample_zncc.size(); ++i)
+//            if (!line.sample_points_undistort.empty())
+//                line.popFront();
+//            while (!line.sample_points_undistort.empty())
+//            {
+////                ROS_DEBUG("line.sample_zncc.front(): %f", line.sample_zncc.front());
+//                if (line.sample_zncc.front() < threshold)
+//                    line.popFront();
+//                else
+//                {
+//                    //                line.StartUV = line.sample_points_undistort[i];
+//                    line.StartUV = line.sample_points_undistort.front();
+//                    line.start_predict_fail = false;
+//                    break;
+//                }
+//            }
+        }
+
+        //check end point
+//        if (line.end_predict_fail)
+        if (line.end_predict_fail || !inBorder(line.end_xy, forw_img.rows, forw_img.cols))
+        {
+            if (!line.sample_points_undistort.empty()) {
+                line.end_xy = line.sample_points_undistort.back();
+                need_update = true;
+            }
+
+////            for (int i = line.sample_zncc.size() - 1; i >= 0; --i)
+////            ROS_DEBUG("line.sample_zncc.back(): %f", line.sample_zncc.back());
+//            if (!line.sample_points_undistort.empty())
+//                line.popBack();
+//
+//            while (!line.sample_points_undistort.empty())
+//            {
+//                if (line.sample_zncc.back() < threshold)
+//                    line.popBack();
+//                else
+//                {
+//                    //line.EndUV = line.sample_points_undistort[i];
+//                    line.EndUV = line.sample_points_undistort.back();
+//                    line.end_predict_fail = false;
+//                    break;
+//                }
+//            }
+        }
+
+        if (need_update)
+        {
+//            MakeALine(line.start_xy, line.end_xy, line);
+            line.is_valid = Line::valid;
+            line.updated_forwframe = false;
+//            ROS_DEBUG("line[%d](new_detect = %d) StartUV(%f, %f)", i, line.new_detect, line.StartUV.x, line.StartUV.y);
+//            ROS_DEBUG("line[%d](new_detect = %d) EndUV(%f, %f)", i,  line.new_detect, line.EndUV.x, line.EndUV.y);
+        }
+//        //check new line
+        if (line.length < 30)
+            line.is_valid = Line::too_short;
+        ++i;
+    }
+}
+
+void LineFeatureTracker::reduceLine(vector<Line> &lines, vector<int> &IDs) {
+    ROS_ASSERT(lines.size() == IDs.size());
+    ROS_ASSERT(lines.size() == tmp_track_cnt.size());
+    ROS_WARN("reduceLine");
+
+    int j = 0;
+    for (int i = 0; i < int(lines.size()); i++)
+    {
+        if (lines[i].is_valid == Line::valid)
+        {
+            lines[j] = lines[i];
+            tmp_track_cnt[j] = tmp_track_cnt[i];
+            forw_pts[2 * j] = forw_pts[2 * i];
+            forw_pts[2 * j + 1] = forw_pts[2 * i + 1];
+            IDs[j++] = IDs[i];
+        }
+        else
+            ROS_WARN("lose line local: %d, global: %d, valid type = %d", i, IDs[i], lines[i].is_valid);
+    }
+
+    forw_pts.resize(2 * j);
+    tmp_track_cnt.resize(j);
+    lines.resize(j);
+    IDs.resize(j);
+}
+
+void LineFeatureTracker::fitLinesBySamples(vector<Line> &lines) {
+    cv::Vec4f line4f;
+    for (Line& line : lines) {
+        std::vector<Point2f> points(line.sample_points_undistort.begin(), line.sample_points_undistort.end());
+        cv::fitLine(points, line4f, CV_DIST_HUBER, 1.0, 0.1, 0.01);
+        Point2f dir(line4f[0], line4f[1]);
+        Point2f x0y0(line4f[2], line4f[3]);
+        Point2f line_start = x0y0 + (line.start_xy - x0y0).dot(dir) * dir;
+        Point2f line_end = x0y0 + (line.end_xy - x0y0).dot(dir) * dir;
+        MakeALine(line_start, line_end, forw_img.rows, forw_img.cols, line);
+    }
+}
+
+void LineFeatureTracker::extractELSEDLine(const Mat &img, vector<Line> &lines, vector<Line> &lines_exist) {
+    upm::ELSED elsed;
+    elsed.setNMSExtend(nms_extend);
+
+    lines.clear();
+    TicToc t_r;
+
+    //todo 采样点传递到ELSED，验证是否为anchor
+    if (!lines_exist.empty())
+    {
+        int line_size = lines_exist.size();
+        elsed.getLinesExist().resize(line_size);
+        int i = 0;
+        for (const Line& line : lines_exist)
+        {
+            upm::lineInfo& line_info = elsed.getLinesExist()[i];
+            line_info.centerPoint = line.Center;
+            line_info.angle =  line.theta / M_PI * 180.0;
+            line_info.length = line.length;
+            line_info.startPoint = line.start_xy;
+            line_info.endPoint = line.end_xy;
+            line_info.unitDir = line.unitDir;
+//            line_info.need_detect = !line.extended;
+            line_info.need_detect = true;
+            std::vector<cv::Point2f> samples(line.sample_points_undistort.begin(), line.sample_points_undistort.end());
+            swap(samples, line_info.sample_points);
+            ++i;
+        }
+    }
+
+    if (lines_exist.size() >= max_lines_num)
+        elsed.enough_lines = true;
+
+    //    upm::Segments segs = elsed.detect(img);
+    ROS_DEBUG("process Image");
+    elsed.processImage(img);
+    ROS_DEBUG("process Image, done");
+
+//    computeGradientDirection(elsed.getImgInfoPtr()->dxImg, elsed.getImgInfoPtr()->dyImg, gradient_dir);
+
+
+//    segs = elsed.getELSEDSegments();
+    int line_id = 0;
+    const upm::Segments& segs = elsed.outside_nms_lines;
+    lines.resize(segs.size());
+//    ROS_DEBUG("new lines: %d", segs.size());
+    for(unsigned int i = 0; i < segs.size(); i++)
+    {
+        Line& line = lines[i];
+        MakeALine(cv::Point2f(segs[i][0], segs[i][1]), cv::Point2f(segs[i][2], segs[i][3]), img.rows, img.cols, line);
+        line.start_xy_visual = line.start_xy;
+        line.end_xy_visual = line.end_xy;
+        line.updated_forwframe = true;
+        line.id = line_id;
+        line.num_untracked = 0;
+        line_id++;
+//        ROS_DEBUG("line[%d] length: %f", i, line.length);
+    }
+
+    std::vector<upm::Segments> nms_lines;
+    nms_lines = elsed.getNMSSegments();
+    std::vector<std::vector<Line>> lines_predict_extract;
+    lines_predict_extract.resize(nms_lines.size());
+//    line_update.clear();
+    for(unsigned int i = 0; i < nms_lines.size(); i++)
+    {
+        lines_predict_extract[i].resize(nms_lines[i].size());
+        for (int j = 0; j < nms_lines[i].size(); ++j) {
+            Line& line = lines_predict_extract[i][j];
+            MakeALine(cv::Point2f(nms_lines[i][j][0], nms_lines[i][j][1]), cv::Point2f(nms_lines[i][j][2], nms_lines[i][j][3]), img.rows, img.cols, line);
+            line.updated_forwframe = true;
+            line.id = line_id;
+            line_id++;
+//            line_update.emplace_back(line);
+        }
+//        ROS_DEBUG("nms[%d] lines: %d", i, nms_lines[i].size());
+    }
+
+    //check lines similarity
+    ROS_DEBUG("update lines_exist");
+    for (int i = 0; i < lines_exist.size(); ++i)
+    {
+//        ROS_DEBUG("i = %d", i);
+        Line& line_old = lines_exist[i];
+//        line_old.Center;
+//        float angle_old = line_old.theta / M_PI * 180.0;
+//        line_old.length;
+//        line_old.StartUV;
+//        line_old.EndUV;
+        const float mid_distance_threshold = 8.0;
+
+        int id_min = -1;
+        float dist_min = 9999.999;
+        bool merge_line = false;//todo
+        vector<int> id_merge;
+//        ROS_DEBUG("lines_predict_extract[%d].size() = %lu", i, lines_predict_extract[i].size());
+        ROS_ASSERT(lines_predict_extract.size() == lines_exist.size());
+        //Traverse all lines in the NMS region to update the line
+        for (int j = 0; j < lines_predict_extract[i].size(); ++j)
+        {
+//            ROS_DEBUG("j = %d", j);
+            const Line& line_new = lines_predict_extract[i][j];
+
+            //same line
+            if (norm((line_old.start_xy - line_new.start_xy)) < mid_distance_threshold &&
+                norm((line_old.end_xy - line_new.end_xy)) < mid_distance_threshold)
+            {
+//                ROS_DEBUG("line %d, find same line", j);
+                line_old = line_new;
+                line_old.updated_forwframe = true;
+                line_old.start_xy_visual = line_old.start_xy;
+                line_old.end_xy_visual = line_old.end_xy;
+                line_old.num_untracked = 0;
+                id_merge.clear();
+                break;
+            }
+
+            //similar length
+            if (line_old.length >= line_new.length) {
+                if (line_old.length * 0.5 > line_new.length)
+                    continue;
+            } else {
+                if (line_new.length * 0.5 > line_old.length)
+                    continue;
+            }
+
+            //todo angle
+            if (acos(abs(line_old.unitDir.dot(line_new.unitDir))) > 8.0 / 180.0 * M_PI)
+                continue;
+            //distance
+
+            //check midpoint distance
+            if (!checkMidPointDistance(line_old.start_xy, line_old.end_xy, line_new.start_xy, line_new.end_xy, mid_distance_threshold))
+                continue;
+
+            float d1 = point2line(line_old.start_xy, line_new.start_xy, line_new.end_xy);
+            float d2 = point2line(line_old.end_xy, line_new.start_xy, line_new.end_xy);
+//            float d3 = point2line(line_old.Center, line_new.start_xy, line_new.end_xy);
+//            float d_mean = (d1 + d2 + d3) / 3.0;
+            float d_mean = (d1 + d2) / 2.0;
+            if (merge_line) {
+                if (d_mean < 5)
+                    id_merge.emplace_back(j);
+            } else {
+                if (dist_min > d_mean)
+                    dist_min = d_mean;
+                id_min = j;
+            }
+        }
+//        ROS_DEBUG("compute similarity, done");
+
+        if ((merge_line && id_merge.empty()) || (!merge_line && id_min == -1)) {
+            line_old.num_untracked++;
+            if (line_old.num_untracked >= LINE_MAX_UNTRACKED)
+                line_old.is_valid = Line::large_untracked;
+            line_old.updated_forwframe = false;
+            continue;
+        }
+
+        if (!merge_line)
+            line_old = lines_predict_extract[i][id_min];
+        else
+//        if (!id_merge.empty())
+        {
+            Line line = lines_predict_extract[i][id_merge[0]];
+
+            for (int j = 1; j < id_merge.size(); ++j)
+            {
+                const Line& line_j = lines_predict_extract[i][id_merge[j]];
+
+                cv::Point2f start_new, end_new;
+                if (line.start_xy.x < line_j.start_xy.x)
+                {
+                    start_new = line.start_xy;
+//                    start_is_old = true;
+                }
+                else
+                {
+                    start_new = line_j.start_xy;
+//                    start_is_old = false;
+                }
+
+                if (line.end_xy.x > line_j.end_xy.x)
+                {
+                    end_new = line.end_xy;
+//                    end_is_old = true;
+                }
+                else
+                {
+                    end_new = line_j.end_xy;
+//                    end_is_old = false;
+                }
+
+                MakeALine(start_new, end_new, img.rows, img.cols, line);
+            }
+            line_old = line;
+        }
+        line_old.updated_forwframe = true;
+        line_old.start_xy_visual = line_old.start_xy;
+        line_old.end_xy_visual = line_old.end_xy;
+        line_old.num_untracked = 0;
+//        ROS_DEBUG("merge, done");
+    }
+    ROS_DEBUG("update lines_exist, done");
+
+    //排序后id会不对应
+//    sort(lines_exist.begin(),lines_exist.end(), Line::sortByLength);
+//    ROS_DEBUG("update lines_exist, done");
+
+//    ROS_WARN("ELSED lines_exist");
+//    for (int i = 0; i < lines_exist.size(); ++i)
+//    {
+//        const Line& l = lines_exist[i];
+//        ROS_DEBUG("line id: %d , new_detect : %d", prev_lineID[i], (int)l.new_detect);
+//        ROS_DEBUG("start visual: (%f, %f)", l.start_xy_visual.x, l.start_xy_visual.y);
+//        ROS_DEBUG("end visual:   (%f, %f)", l.end_xy_visual.x,  l.end_xy_visual.y);
+//    }
+}
+
+bool LineFeatureTracker::checkMidPointDistance(const Point2f &start_i, const Point2f &end_i, const Point2f &start_j,
+                                               const Point2f &end_j, const float threshold) {
+    const Point2f mid_i(start_i * 0.5 + end_i * 0.5);
+    const Point2f mid_j(start_j * 0.5 + end_j * 0.5);
+    float d1 = point2line(mid_i, start_j, end_j);
+    float d2 = point2line(mid_j, start_i, end_i);
+//    ROS_DEBUG("d1 = %f, d2 = %f", d1, d2);
+    if(d1 <= threshold && d2 <= threshold)
+        return true;
+    return false;
+}
+
+void LineFeatureTracker::updateTrackingLinesAndID() {
+    ROS_ASSERT(lines_predict.size() == prev_lineID.size());
+    ROS_ASSERT(lines_predict.size() == tmp_track_cnt.size());
+
+    for (int i = 0; i < lines_predict.size(); ++i)
+        tmp_track_cnt[i]++;
+
+    int num_lines_predict = lines_predict.size();
+    int new_lines_needed = max_lines_num - num_lines_predict;
+    int num_lines_new = forw_line.size();
+    if (new_lines_needed > 0)
+    {
+//        sort(forwframe_->mergedLine.begin(),forwframe_->mergedLine.end(), Line::sortByLength);
+        // set new lines ID
+        for (size_t i = 0; i < new_lines_needed && i < num_lines_new; ++i)
+        {
+            lines_predict.emplace_back(forw_line[i]);
+            prev_lineID.emplace_back(allfeature_cnt++);
+            tmp_track_cnt.emplace_back(1);
+        }
+    }
+//    swap(lines_predict, forwframe_->mergedLine);
+//    swap(prev_lineID, forwframe_->lineID);
+
+    forw_line = lines_predict;
+    ids = prev_lineID;
+    track_cnt = tmp_track_cnt;
+//    for (const int& id : forwframe_->lineID)
+//        ROS_INFO("line id: %d", id);
+}
+
+void LineFeatureTracker::checkGradient(vector<Line> &lines, const int &start_idx) {
+    for (unsigned int i = start_idx; i <lines.size(); i++)
+    {
+        Line& line = lines[i];
+
+        line.sample_points_undistort.clear();
+
+        float line_angle = line.theta / M_PI * 180.0;
+        if (line_angle < 0)
+            line_angle += 180.0;
+        float angle_threshold = 30.0; //angle between line and sample points gradient direction
+
+//        //鱼眼重投影 无畸变 像素坐标
+        Eigen::Vector2f undistort_start, undistort_end;
+        undistort_start(0) = line.start_xy.x;
+        undistort_start(1) = line.start_xy.y;
+        undistort_end(0) = line.end_xy.x;
+        undistort_end(1) = line.end_xy.y;
+        const float &length = line.length;
+
+//        //sample points from start to end
+        deque<Point2f>& sample_pts = line.sample_points_undistort;
+
+        //todo 按像素距离、间隔较小值采样 调参
+        Eigen::Vector2f start_end = undistort_end - undistort_start;
+        double times = max(10.0,  start_end.norm() / 10.0);
+        Eigen::Vector2f interval = (undistort_end - undistort_start) / times;
+        Eigen::Vector2f undistort_p = undistort_start + interval;
+        int pts_total = 0, pts_good = 0;
+        for (int step = 0; step < times - 1; ++step, undistort_p += interval)
+        {
+            ++pts_total;
+//            if (step == times) //end point
+//            {
+//                undistort_p(0) =  undistort_end(0);
+//                undistort_p(1) =  undistort_end(1);
+//            }
+
+            //非端点加入梯度方向条件，不满足不采样
+//            if (step != 0 || step != times) // not start point
+            {
+                if (largeGradientAngle(line_angle, undistort_p(0), undistort_p(1), angle_threshold))
+                    continue;
+            }
+
+            ++pts_good;
+            sample_pts.push_back(Point2f(undistort_p(0), undistort_p(1)));
+        }
+
+        //todo
+        if ((pts_good * 1.0) / (pts_total * 1.0) <= 0.5)
+        {
+            line.is_valid = Line::bad_gradient_direction;
+        }
+    }
+}
+
+bool LineFeatureTracker::largeGradientAngle(const float &line_angle, const float &x, const float &y,
+                                            const float &threshold) {
+    ROS_ASSERT(dxImg.ptr<int16_t>());
+    ROS_ASSERT(dyImg.ptr<int16_t>());
+
+    const int16_t& dx = dxImg.at<int16_t>(y, x);
+    const int16_t& dy = dyImg.at<int16_t>(y, x);
+    if (sqrt(dx * dx + dy *dy) < 30) //gradient too small
+        return true;
+    float gradient_angle = atan2(dy, dx) / M_PI * 180.0; //degree
+//                float gradient_angle = gradient_dir.at<float>(undistort_p(1), undistort_p(0));//degree
+    if (gradient_angle < 0.0)
+        gradient_angle += 180.0;
+    else if (gradient_angle > 180.0)
+        gradient_angle -= 180.0;
+    float delta_angle = abs(gradient_angle - line_angle);
+    if (delta_angle < 90.0 - threshold ||  delta_angle > 90 + threshold)
+        return true;
+    return false;}
+
+void LineFeatureTracker::Line2KeyLine(const vector<Line> &lines_in, vector<LineKL> &lines_out) {
+    int num_lines = lines_in.size();
+    lines_out.resize(num_lines);
+    int line_id = 0;
+    for (int i = 0; i < num_lines; ++i) {
+        const Line& line = lines_in[i];
+        lines_out[i] = MakeKeyLine(line.start_xy, line.end_xy, forw_img.cols);
+//        ROS_DEBUG("lines_out[%d]: start(%f, %f) end(%f, %f)", i, lines_out[i].startPointX,lines_out[i].startPointY
+//                  , lines_out[i].endPointX, lines_out[i].endPointY);
+//        lines_out[i].class_id = line_id;
+//        ++line_id;
+    }
+}
+
+void LineFeatureTracker::KeyLine2Line(const vector<LineKL> &lines_in, vector<Line> &lines_out) {
+    int num_lines = lines_in.size();
+    lines_out.resize(num_lines);
+    for (int i = 0; i < num_lines; ++i) {
+        const KeyLine& line = lines_in[i];
+        MakeALine(line.getStartPoint(), line.getEndPoint(), lines_out[i]);
+    }
+}
+
+void LineFeatureTracker::correctNegativeXY(Point2f &start_pts, Point2f &end_pts) {
+    cv::Point2f dir = end_pts - start_pts;
+    float length = norm(dir);
+    dir = dir / length;
+//    ROS_DEBUG("dir: (%f. %f)", dir.x, dir.y);
+    if (start_pts.x < 0)
+    {
+        float delta_x = 0 - start_pts.x;
+        start_pts.x = 0;
+        if (dir.x != 0)
+            start_pts.y = start_pts.y + delta_x / dir.x * dir.y;
+    }
+    if (start_pts.y < 0)
+    {
+        float delta_y = 0 - start_pts.y;
+        start_pts.y = 0;
+        if (dir.y != 0)
+            start_pts.x = start_pts.x + delta_y / dir.y * dir.x;
+    }
+}
+
+void LineFeatureTracker::correctOutsideXY(Point2f &start_pts, Point2f &end_pts, const int &rows, const int &cols) {
+    cv::Point2f dir = end_pts - start_pts;
+    float length = norm(dir);
+    dir = dir / length;
+//    ROS_DEBUG("dir after: (%f, %f)", dir.x, dir.y);
+
+    if (end_pts.x >= cols)
+    {
+        float delta_x = cols - 1 - end_pts.x;
+        end_pts.x = cols - 1;
+        if (dir.x != 0)
+            end_pts.y = end_pts.y + delta_x / dir.x * dir.y;
+//        ROS_WARN("end_pts X: (%f. %f)", end_pts.x, end_pts.y);
+
+    }
+//    ROS_WARN("end_pts X: (%f. %f)", end_pts.x, end_pts.y);
+
+    if (end_pts.y >= rows)
+    {
+        float delta_y = rows - 1 - end_pts.y;
+        end_pts.y = rows - 1;
+        if (dir.y != 0)
+            end_pts.x = end_pts.x + delta_y / dir.y * dir.x;
+//        ROS_WARN("end_pts Y: (%f. %f)", end_pts.x, end_pts.y);
+    }
+}
+
+void LineFeatureTracker::visualize_line(const Mat &imageMat1, const vector<Line> &lines, const string &name,
+                                        const bool show_NMS_area) {
+    //	Mat img_1;
+    cv::Mat img1;
+    if (imageMat1.channels() != 3){
+        cv::cvtColor(imageMat1, img1, cv::COLOR_GRAY2BGR);
+    }
+    else{
+        img1 = imageMat1;
+    }
+
+    //    srand(time(NULL));
+    int lowest = 0, highest = 255;
+    int range = (highest - lowest) + 1;
+    for (int k = 0; k < lines.size(); ++k)
+    {
+        const Line& line1 = lines[k];
+        const cv::Point2f& startPoint = line1.start_xy;
+        const cv::Point2f& endPoint = line1.end_xy;
+
+        if (show_NMS_area) {
+            Point2f dir = endPoint - startPoint;
+            float angle = atan2(dir.y, dir.x) / M_PI * 180.0;
+            float len = norm((startPoint - endPoint));
+//            ROS_DEBUG("image size: %u x %u", img1.cols, img1.rows);
+//            ROS_DEBUG("start point: (%f, %f)", startPoint.x, startPoint.y);
+//            ROS_DEBUG("end point: (%f, %f)", endPoint.x, endPoint.y);
+            TicToc t_rect;
+            DrawRotatedRectangle(img1, ((startPoint + endPoint) / 2.0), cv::Size(len + nms_extend, nms_extend), angle);
+//            ROS_INFO("DrawRotatedRectangle costs: %fms", t_rect.toc());
+        }
+    }
+
+    for (int k = 0; k < lines.size(); ++k) {
+
+        const Line& line1 = lines[k];  // trainIdx
+        const int& id = prev_lineID[k];
+
+        unsigned int r = lowest + int(rand() % range);
+        unsigned int g = lowest + int(rand() % range);
+        unsigned int b = lowest + int(rand() % range);
+
+        //line
+        const cv::Point2f& startPoint = line1.start_xy;
+        const cv::Point2f& endPoint = line1.end_xy;
+
+//        if (line1.new_detect)
+        if (id > last_feature_count) //new line in the forward frame
+            cv::line(img1, startPoint, endPoint, cv::Scalar(0, 150, 255),2 ,8);
+        else if (line1.updated_forwframe) //old lines updated in the forward frame (green)
+            cv::line(img1, startPoint, endPoint, cv::Scalar(0, 255, 0),2 ,8);
+        else if (line1.num_untracked >= LINE_MAX_UNTRACKED) // large num_untracked, to remove(red)
+            cv::line(img1, startPoint, endPoint, cv::Scalar(0, 0, 255),2 ,8);
+        else //old lines are not updated in the forward frame (blue)
+            cv::line(img1, startPoint, endPoint, cv::Scalar(255, 0, 0),2 ,8);
+
+        //start mid end point
+        // b g r
+        cv::circle(img1, startPoint, 1, cv::Scalar(255, 0, 0), 5);
+//        cv::circle(img1, endPoint, 1, cv::Scalar(0, 0, 255), 5);
+//        cv::circle(img1, 0.5 * startPoint + 0.5 * endPoint, 1, cv::Scalar(0, 255, 0), 5);
+    }
+    imshow(name, img1);
+    waitKey(1);
+}
+
+void LineFeatureTracker::DrawRotatedRectangle(cv::Mat& image, const cv::Point2f& centerPoint, const cv::Size& rectangleSize,
+                                              const float& rotationDegrees, const int& val)
+{
+    //    cv::Scalar color = cv::Scalar(255.0, 255.0, 255.0); // white
+
+    // Create the rotated rectangle
+    cv::RotatedRect rotatedRectangle(centerPoint, rectangleSize, rotationDegrees);
+
+    // We take the edges that OpenCV calculated for us
+    cv::Point2f vertices2f[4];
+    rotatedRectangle.points(vertices2f);
+
+//    vertices2f[0] = Point2f(0, 300);
+//    vertices2f[1] = Point2f(300, 300);
+//    vertices2f[2] = Point2f(300, 200);
+//    vertices2f[3] = Point2f(0, 200);
+
+//    cv::circle(image, vertices2f[0], 1, cv::Scalar(0, 0, 255), 5);
+//    cv::circle(image, vertices2f[1], 1, cv::Scalar(0, 0, 255), 5);
+//    cv::circle(image, vertices2f[2], 1, cv::Scalar(0, 0, 255), 5);
+//    cv::circle(image, vertices2f[3], 1, cv::Scalar(0, 0, 255), 5);
+
+//    {
+//        // Convert them so we can use them in a fillConvexPoly
+//        cv::Point vertices[4];
+//        for (int i = 0; i < 4; ++i)
+//            vertices[i] = vertices2f[i];
+//
+//        TicToc t_fill;
+//        // Now we can fill the rotated rectangle with our specified color
+//        cv::fillConvexPoly(image, vertices, 4, val);
+//        ROS_DEBUG("cv::fillConvexPoly cost: %fms", t_fill.toc());
+//    }
+
+    {
+        TicToc t_fill;
+        uchar *buf = new uchar[4]{255, 255, 255, 0};
+        fillRectangle(image, vertices2f, 4, buf);
+//        ROS_DEBUG("fill Rectangle hand writing cost: %fms", t_fill.toc());
+    }
+}
+
+void LineFeatureTracker::fillRectangle(Mat& img, const Point2f* pts, int npts, const void* color)
+{
+    assert(pts);
+    assert(npts == 4); // only for rectangle
+
+//    Size size = img.size();
+    int pix_size = (int)img.elemSize();
+
+    Point2f start_mid = 0.5 * (pts[0] + pts[3]);
+    Point2f end_mid = 0.5 * (pts[1] + pts[2]);
+    float threshold_p2l = norm(pts[0] - start_mid);
+
+    //sort vertices by y value
+    int y_min = pts[0].y, id_min = 0;
+    for (int i = 0; i < npts; ++i)
+        if (pts[i].y < y_min)
+        {
+            y_min = pts[i].y;
+            id_min = i;
+        }
+
+//    Point pts_sorted[4];
+//    int j = id_min;
+//    for (int i = 0; i < 4; ++i)
+//        pts_sorted[i] = pts[j % 4];
+
+    //sort A B C D by y descending
+    const Point2f& p_a = pts[id_min];
+//    cv::circle(img, p_a, 1, cv::Scalar(255, 0, 0), 5);
+    Point2f p_b = pts[(id_min + 1) % npts];
+    Point2f p_c = pts[(id_min + npts - 1) % npts];
+    if (p_b.y > p_c.y)
+        swap(p_b, p_c);
+//    cv::circle(img, p_b, 1, cv::Scalar(0, 255, 0), 5);
+//    cv::circle(img, p_c, 1, cv::Scalar(0, 0, 255), 5);
+
+    const Point2f& p_d = pts[(id_min + 2) % npts];
+//    ROS_DEBUG("p_a: (%f, %f)", p_a.x, p_a.y);
+//    ROS_DEBUG("p_b: (%f, %f)", p_b.x, p_b.y);
+//    ROS_DEBUG("p_c: (%f, %f)", p_c.x, p_c.y);
+//    ROS_DEBUG("p_d: (%f, %f)", p_d.x, p_d.y);
+//    cv::circle(img, p_d, 1, cv::Scalar(255, 150, 0), 5);
+
+    //angle = 0 or 90 degree
+    if ((int)p_a.y == (int)p_b.y)
+    {
+        int row_start = (int)p_a.y;
+        int row_target = (int)p_c.y;
+        int col_left = (int)p_a.x;
+        int col_right = (int)p_b.x;
+        if (col_left > col_right)
+            swap(col_left, col_right);
+
+        //outside the image
+        if (col_left >= img.cols || col_right < 0)
+            return;
+        if (col_left < 0)
+            col_left = 0;
+        if (col_right >= img.cols)
+            col_right = img.cols - 1;
+        for (int row_ptr = row_start; row_ptr <= row_target; ++row_ptr)
+            for (int i = col_left; i <= col_right; ++i)
+                img.at<cv::Vec3b>(row_ptr, i) = cv::Vec3b (255, 255, 255);
+        return;
+    }
+
+    //set value between 2 lines
+    uchar* image_ptr = img.ptr<uchar>();
+    //delta x of line AB and AD, let AB be left, AC be right
+    float delta_x_per_row_AB = (p_b.x - p_a.x) / (p_b.y - p_a.y);
+//    ROS_DEBUG("delta_x_per_row_left: %f", delta_x_per_row_AB);
+    float delta_x_per_row_AC = (p_c.x - p_a.x) / (p_c.y - p_a.y);
+//    ROS_DEBUG("delta_x_per_row_right: %f", delta_x_per_row_AC);
+
+    int row_start = (int)p_a.y;
+    int row_target = (int)p_b.y;
+    int row_ptr = row_start;
+    float col_start_left = (int)p_a.x;
+    float col_start_right = (int)p_a.x;
+//    TicToc t_row;
+    for (; row_ptr <= row_target; ++row_ptr)
+    {
+        col_start_left += delta_x_per_row_AB;
+        if (row_ptr == row_target)
+            col_start_left = p_b.x;
+        col_start_right += delta_x_per_row_AC;
+
+        //outside the image
+        if (row_ptr < 0)//todo optimization
+            continue;
+        if (row_ptr >= img.rows)
+            break;
+
+        //set value by column
+//        int delta_y = row_ptr - row_start;
+        int col_left = col_start_left;
+        int col_right = col_start_right;
+        if (col_left > col_right)
+            swap(col_left, col_right);
+//        ROS_DEBUG("flii row: %d, %d --> %d", row_ptr, col_left, col_right);
+
+        //outside the image
+        if (col_left >= img.cols || col_right < 0)
+            continue;
+        if (col_left < 0)
+            col_left = 0;
+        if (col_right >= img.cols)
+            col_right = img.cols - 1;
+//        cv::circle(img, Point2f(col_left, row_ptr), 1, cv::Scalar(255, 150, 0), 5);
+//        cv::circle(img, Point2f(col_right, row_ptr), 1, cv::Scalar(255, 150, 0), 5);
+
+//        uchar* ptr = img.data;
+//        ptr += img.step * row_ptr;
+//        ICV_HLINE( ptr, col_left, col_right, color, pix_size );
+
+        for (int i = col_left; i <= col_right; ++i)
+        {
+            img.at<cv::Vec3b>(row_ptr, i) = cv::Vec3b (255, 255, 255);
+            //slower
+//            img.at<cv::Vec3b>(row_ptr, i)[0] = 255;
+//            img.at<cv::Vec3b>(row_ptr, i)[1] = 255;
+//            img.at<cv::Vec3b>(row_ptr, i)[2] = 255;
+        }
+    }
+//    ROS_DEBUG("set value row cost: %fms", t_row.toc());
+
+    //between BD and AC
+    row_start = row_ptr;
+    row_target = (int)p_c.y;
+    for (; row_ptr <= row_target; ++row_ptr)
+    {
+        col_start_left += delta_x_per_row_AC;
+        col_start_right += delta_x_per_row_AC;
+        if (row_ptr == row_target)
+            col_start_right = p_c.x;
+
+        //outside the image
+        if (row_ptr < 0)//todo optimization
+            continue;
+        if (row_ptr >= img.rows)
+            break;
+
+        //set value by column
+        int col_left = col_start_left;
+        int col_right = col_start_right;
+        if (col_left > col_right)
+            swap(col_left, col_right);
+
+        //outside the image
+        if (col_left >= img.cols || col_right < 0)
+            continue;
+        if (col_left < 0)
+            col_left = 0;
+        if (col_right >= img.cols)
+            col_right = img.cols - 1;
+
+        for (int i = col_left; i <= col_right; ++i)
+            img.at<cv::Vec3b>(row_ptr, i) = cv::Vec3b (255, 255, 255);
+    }
+
+    //between BD and CD
+    row_start = row_ptr;
+    row_target = (int)p_d.y;
+    for (; row_ptr < row_target; ++row_ptr)
+    {
+        col_start_left += delta_x_per_row_AC;
+        col_start_right += delta_x_per_row_AB;
+
+        //outside the image
+        if (row_ptr < 0)//todo optimization
+            continue;
+        if (row_ptr >= img.rows)
+            break;
+
+        //set value by column
+        int col_left = col_start_left;
+        int col_right = col_start_right;
+        if (col_left > col_right)
+            swap(col_left, col_right);
+
+        //outside the image
+        if (col_left >= img.cols || col_right < 0)
+            continue;
+        if (col_left < 0)
+            col_left = 0;
+        if (col_right >= img.cols)
+            col_right = img.cols - 1;
+
+        for (int i = col_left; i <= col_right; ++i)
+            img.at<cv::Vec3b>(row_ptr, i) = cv::Vec3b (255, 255, 255);
+    }
+//    ROS_DEBUG("set value row cost: %fms", t_row.toc());
 }
